@@ -16,12 +16,20 @@ export default function AnalyticsScreen() {
   const styles = useStyles();
   
   const [period, setPeriod] = useState<AnalyticsPeriod>("daily");
-  const { data, isLoading } = useGetAnalytics(period);
+  const { data, isLoading, isError } = useGetAnalytics(period);
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load analytics data.</Text>
       </View>
     );
   }

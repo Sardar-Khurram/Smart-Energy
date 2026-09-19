@@ -1,17 +1,15 @@
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { Href, router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { Href } from "expo-router";
 import React from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useGetDashboardData } from "@/api/energy.service";
+import { useFirebaseLiveData, useGetDashboardData } from "@/api/energy.service";
 import HeroCard from "@/components/dashboard/HeroCard";
 import QuickActions from "@/components/dashboard/QuickActions";
-import MiniSparkline from "@/components/charts/MiniSparkline";
 import MetricCard from "@/components/ui/MetricCard";
 import { METRIC_COLORS } from "@/constants/energyConstants";
-import { palette, PRIMARY_GRADIENT, Typography, useResponsiveTokens } from "@/constants/theme";
+import { palette, Typography, useResponsiveTokens } from "@/constants/theme";
 import { useThemeColor } from "@/hooks/useThemeColor";
 import { formatCurrency, formatUnits } from "@/utils/formatters";
 
@@ -19,7 +17,7 @@ const QUICK_ACTIONS = [
   {
     id: "bill", title: "Bill Prediction", subtitle: "Monthly estimate",
     icon: "cash-multiple" as const, gradient: [palette.voltYellowDark, palette.voltYellow] as [string, string],
-    route: "/(tabs)/bill" as Href,
+    route: { pathname: "/(tabs)/bill", params: { mode: "bill" } } as Href,
   },
   {
     id: "devices", title: "Devices", subtitle: "Appliance usage",
@@ -34,18 +32,32 @@ const QUICK_ACTIONS = [
   {
     id: "tips", title: "AI Tips", subtitle: "Save electricity",
     icon: "lightbulb-on-outline" as const, gradient: [palette.safeGreenDark, palette.safeGreen] as [string, string],
-    route: "/(tabs)/bill" as Href,
+    route: { pathname: "/(tabs)/bill", params: { mode: "tips" } } as Href,
   },
 ];
-
-// Mock sparkline data
-const SPARK_DATA = [420, 450, 430, 482, 500, 470, 490, 510, 480, 495, 520, 505];
 
 export default function DashboardScreen() {
   const theme = useThemeColor();
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
-  const { data, isLoading } = useGetDashboardData();
+  
+  // Fetch slow/calculated data from API
+  const { data: apiData, isLoading, isError } = useGetDashboardData();
+  
+  // Fetch real-time sensor data from Firebase
+  const { data: liveData } = useFirebaseLiveData("energy");
+
+  // Merge them: prioritize live data for metrics
+  const data = React.useMemo(() => {
+    if (!apiData) return null;
+    return {
+      ...apiData,
+      voltage: liveData?.voltage ?? apiData.voltage,
+      current: liveData?.current ?? apiData.current,
+      power: liveData?.power ?? apiData.power,
+      temperature: liveData?.temperature ?? apiData.temperature,
+    };
+  }, [apiData, liveData]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -57,10 +69,18 @@ export default function DashboardScreen() {
   const formatDate = () =>
     new Date().toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load dashboard data.</Text>
       </View>
     );
   }
@@ -88,8 +108,7 @@ export default function DashboardScreen() {
         {/* Today's Summary */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Today's Summary</Text>
-            <MiniSparkline data={SPARK_DATA} color={theme.primary} width={80} height={24} />
+            <Text style={styles.sectionTitle}>{"Today's Summary"}</Text>
           </View>
           <View style={styles.metricsGrid}>
             <View style={styles.metricWrapper}>

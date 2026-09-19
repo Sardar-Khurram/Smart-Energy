@@ -51,18 +51,18 @@ export default function TabLayout(): React.JSX.Element {
     segments.length === 1 ||
     secondSegment === "analytics" ||
     secondSegment === "live" ||
-    secondSegment === "alerts" ||
+    // secondSegment === "alerts" ||
     secondSegment === "settings";
 
   const tabs = [
     { name: "index",     title: "Home",      icon: "home-outline",          iconFocused: "home" },
     { name: "analytics", title: "Analytics",  icon: "chart-line",            iconFocused: "chart-line-variant" },
     { name: "live",      title: "Live",       icon: "pulse",                 iconFocused: "pulse" },
-    { name: "alerts",    title: "Alerts",     icon: "bell-outline",          iconFocused: "bell" },
+    // { name: "alerts",    title: "Alerts",     icon: "bell-outline",          iconFocused: "bell" },
     { name: "settings",  title: "Settings",   icon: "cog-outline",           iconFocused: "cog" },
   ];
 
-  const hiddenScreens = ["bill", "devices", "sensors"];
+  const hiddenScreens = ["bill", "devices", "sensors", "alerts"];
 
   return (
     <Tabs

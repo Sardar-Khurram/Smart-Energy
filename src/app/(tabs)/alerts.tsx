@@ -1,9 +1,11 @@
 import React, { useState } from "react";
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useGetAlerts } from "@/api/alerts.service";
+import { generateTips } from "@/api/energy.service";
 import CommonHeader from "@/components/headers/CommonHeader";
 import AlertItem from "@/components/ui/AlertItem";
 import { ALERT_STYLES } from "@/constants/energyConstants";
@@ -16,14 +18,37 @@ export default function AlertsScreen() {
   const theme = useThemeColor();
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
+  const queryClient = useQueryClient();
   
   const [filter, setFilter] = useState<FilterType>("all");
-  const { data: alerts, isLoading } = useGetAlerts();
+  const [isGenerating, setIsGenerating] = useState(false);
+  const { data: alerts, isLoading, isError } = useGetAlerts();
 
-  if (isLoading || !alerts) {
+  const handleGenerateAlerts = async () => {
+    try {
+      setIsGenerating(true);
+      await generateTips();
+      // Refetch the alerts query to show the newly generated ones
+      await queryClient.invalidateQueries({ queryKey: ["alerts"] });
+    } catch (error) {
+      Alert.alert("Generation Failed", error instanceof Error ? error.message : "Could not generate alerts.");
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (isError || !alerts) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load alerts.</Text>
       </View>
     );
   }
@@ -33,11 +58,11 @@ export default function AlertsScreen() {
   return (
     <View style={[styles.container, { paddingTop: top }]}>
       <CommonHeader 
-        title="Alerts" 
+        title="Alerts & Tips" 
         showBack={false} 
         rightAction={{
-          icon: "filter",
-          onPress: () => {},
+          icon: "cpu", // Using Feather 'cpu' icon representing AI/Smart Analysis
+          onPress: isGenerating ? () => {} : handleGenerateAlerts,
           badge: alerts.filter(a => !a.read).length
         }}
       />
@@ -51,11 +76,24 @@ export default function AlertsScreen() {
         </ScrollView>
       </View>
 
+      {isGenerating && (
+        <View style={styles.generatingOverlay}>
+          <ActivityIndicator size="small" color={theme.primary} style={{ marginRight: 8 }} />
+          <Text style={{ color: theme.primary, fontFamily: Typography.fontFamily, fontWeight: "500" }}>
+            AI is analyzing data and generating new alerts...
+          </Text>
+        </View>
+      )}
+
       {filteredAlerts.length === 0 ? (
         <View style={styles.emptyContainer}>
           <MaterialCommunityIcons name="check-circle-outline" size={64} color={theme.success} />
           <Text style={styles.emptyTitle}>All Clear!</Text>
           <Text style={styles.emptyDesc}>No {filter !== "all" ? filter : ""} alerts to show at the moment.</Text>
+          <TouchableOpacity style={styles.generateButton} onPress={handleGenerateAlerts} disabled={isGenerating}>
+            <MaterialCommunityIcons name="robot-outline" size={20} color={theme.background} />
+            <Text style={styles.generateButtonText}>Generate AI Alerts</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <FlatList
@@ -155,6 +193,32 @@ function useStyles() {
       color: theme.mutedForeground,
       fontFamily: Typography.fontFamily,
       textAlign: "center",
+      marginBottom: spacing.xl,
+    },
+    generateButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: theme.primary,
+      paddingHorizontal: spacing.xl,
+      paddingVertical: spacing.md,
+      borderRadius: radius.full,
+      gap: spacing.sm,
+    },
+    generateButtonText: {
+      color: theme.background,
+      fontFamily: Typography.fontFamily,
+      fontWeight: Typography.fontWeights.bold,
+      fontSize: fontSizes.base,
+    },
+    generatingOverlay: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: theme.primary + "15", // 15% opacity
+      paddingVertical: spacing.md,
+      marginHorizontal: spacing.md,
+      borderRadius: radius.md,
+      marginBottom: spacing.md,
     },
   });
 }

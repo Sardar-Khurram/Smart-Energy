@@ -18,7 +18,7 @@ export default function DeviceItem({ device, totalPower, style }: DeviceItemProp
   const styles = useStyles();
   const theme = useThemeColor();
   const percentage = totalPower > 0 ? (device.power / totalPower) * 100 : 0;
-  const iconName = DEVICE_ICONS[device.device] || DEVICE_ICONS.Default;
+  const iconName = device.icon || DEVICE_ICONS[device.device] || DEVICE_ICONS.Default;
 
   return (
     <View style={[styles.card, style]}>

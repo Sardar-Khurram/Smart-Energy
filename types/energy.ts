@@ -43,6 +43,11 @@ export interface AnalyticsSummary {
   changePercent: number;
 }
 
+export interface TipItem {
+  text: string;
+  category: "alert" | "maintenance" | "energy saving" | string;
+}
+
 /** Bill prediction data */
 export interface BillPrediction {
   monthUnits: number;
@@ -52,7 +57,7 @@ export interface BillPrediction {
   status: "Safe" | "Warning" | "Over Budget";
   dailyAverage: number;
   daysRemaining: number;
-  savingTips: string[];
+  savingTips: TipItem[];
 }
 
 /** Alert notification */
@@ -75,3 +80,12 @@ export interface DeviceUsage {
 
 /** Analytics period type */
 export type AnalyticsPeriod = "daily" | "weekly" | "monthly";
+
+/** AI-generated energy saving tip from backend */
+export interface AiTip {
+  id: string;
+  device_id: string;
+  tip_text: string;
+  category: string;
+  generated_at: string;
+}

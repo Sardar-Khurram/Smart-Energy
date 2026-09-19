@@ -1,8 +1,9 @@
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { useLocalSearchParams } from "expo-router";
 import React from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
 
 import { useGetBillPrediction } from "@/api/energy.service";
 import CommonHeader from "@/components/headers/CommonHeader";
@@ -13,14 +14,26 @@ import { formatCurrency } from "@/utils/formatters";
 export default function BillPredictionScreen() {
   const theme = useThemeColor();
   const { top } = useSafeAreaInsets();
+  const { mode } = useLocalSearchParams<{ mode?: "bill" | "tips" }>();
   const styles = useStyles();
-  
-  const { data, isLoading } = useGetBillPrediction();
 
-  if (isLoading || !data) {
+  const isTipsMode = mode === "tips";
+  const title = isTipsMode ? "AI Saving Tips" : "Bill Prediction";
+  
+  const { data, isLoading, isError } = useGetBillPrediction();
+
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load bill prediction.</Text>
       </View>
     );
   }
@@ -38,80 +51,116 @@ export default function BillPredictionScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
-      <CommonHeader title="Bill Prediction" />
+      <CommonHeader title={title} />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         
-        {/* Prediction Card */}
-        <View style={styles.cardWrapper}>
-          <LinearGradient
-            colors={gradientColors as [string, string]}
-            start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-            style={styles.predictionCard}
-          >
-            <View style={styles.statusBadge}>
-              <MaterialCommunityIcons 
-                name={isOverBudget ? "alert-circle" : isWarning ? "alert" : "check-circle"} 
-                size={16} color={palette.white} 
-              />
-              <Text style={styles.statusText}>{data.status}</Text>
+        {!isTipsMode && (
+          <>
+            {/* Prediction Card */}
+            <View style={styles.cardWrapper}>
+              <LinearGradient
+                colors={gradientColors as [string, string]}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                style={styles.predictionCard}
+              >
+                <View style={styles.statusBadge}>
+                  <MaterialCommunityIcons 
+                    name={isOverBudget ? "alert-circle" : isWarning ? "alert" : "check-circle"} 
+                    size={16} color={palette.white} 
+                  />
+                  <Text style={styles.statusText}>{data.status}</Text>
+                </View>
+
+                <Text style={styles.cardLabel}>Estimated Monthly Bill</Text>
+                <Text style={styles.billAmount}>{formatCurrency(data.predictedBill)}</Text>
+                <Text style={styles.budgetDesc}>Based on current usage patterns</Text>
+                
+                {/* Progress Bar */}
+                <View style={styles.progressSection}>
+                  <View style={styles.progressLabels}>
+                    <Text style={styles.progressLabel}>0</Text>
+                    <Text style={styles.progressLabel}>Budget: {formatCurrency(data.budget)}</Text>
+                  </View>
+                  <View style={styles.progressTrack}>
+                    <View style={[styles.progressBar, { width: `${progressPercentage}%` }]} />
+                  </View>
+                </View>
+              </LinearGradient>
             </View>
 
-            <Text style={styles.cardLabel}>Estimated Monthly Bill</Text>
-            <Text style={styles.billAmount}>{formatCurrency(data.predictedBill)}</Text>
-            <Text style={styles.budgetDesc}>Based on current usage patterns</Text>
-            
-            {/* Progress Bar */}
-            <View style={styles.progressSection}>
-              <View style={styles.progressLabels}>
-                <Text style={styles.progressLabel}>0</Text>
-                <Text style={styles.progressLabel}>Budget: {formatCurrency(data.budget)}</Text>
+            {/* Breakdown */}
+            <Text style={styles.sectionTitle}>Breakdown</Text>
+            <View style={styles.statsGrid}>
+              <View style={styles.statBox}>
+                <MaterialCommunityIcons name="calendar-today" size={24} color={theme.primary} />
+                <Text style={styles.statValue}>{data.daysRemaining}</Text>
+                <Text style={styles.statLabel}>Days Left</Text>
               </View>
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressBar, { width: `${progressPercentage}%` }]} />
+              <View style={styles.statBox}>
+                <MaterialCommunityIcons name="lightning-bolt" size={24} color={theme.info} />
+                <Text style={styles.statValue}>{data.monthUnits}</Text>
+                <Text style={styles.statLabel}>Units Used</Text>
+              </View>
+              <View style={styles.statBox}>
+                <MaterialCommunityIcons name="chart-line" size={24} color={theme.accent} />
+                <Text style={styles.statValue}>{data.dailyAverage}</Text>
+                <Text style={styles.statLabel}>Daily Avg (kWh)</Text>
+              </View>
+              <View style={styles.statBox}>
+                <MaterialCommunityIcons name="sigma" size={24} color={theme.secondary} />
+                <Text style={styles.statValue}>{data.predictedUnits}</Text>
+                <Text style={styles.statLabel}>Predicted Units</Text>
               </View>
             </View>
-          </LinearGradient>
-        </View>
-
-        {/* Breakdown */}
-        <Text style={styles.sectionTitle}>Breakdown</Text>
-        <View style={styles.statsGrid}>
-          <View style={styles.statBox}>
-            <MaterialCommunityIcons name="calendar-today" size={24} color={theme.primary} />
-            <Text style={styles.statValue}>{data.daysRemaining}</Text>
-            <Text style={styles.statLabel}>Days Left</Text>
-          </View>
-          <View style={styles.statBox}>
-            <MaterialCommunityIcons name="lightning-bolt" size={24} color={theme.info} />
-            <Text style={styles.statValue}>{data.monthUnits}</Text>
-            <Text style={styles.statLabel}>Units Used</Text>
-          </View>
-          <View style={styles.statBox}>
-            <MaterialCommunityIcons name="chart-line" size={24} color={theme.accent} />
-            <Text style={styles.statValue}>{data.dailyAverage}</Text>
-            <Text style={styles.statLabel}>Daily Avg (kWh)</Text>
-          </View>
-          <View style={styles.statBox}>
-            <MaterialCommunityIcons name="sigma" size={24} color={theme.secondary} />
-            <Text style={styles.statValue}>{data.predictedUnits}</Text>
-            <Text style={styles.statLabel}>Predicted Units</Text>
-          </View>
-        </View>
+          </>
+        )}
 
         {/* Saving Tips */}
-        <Text style={styles.sectionTitle}>AI Saving Tips</Text>
-        <View style={styles.tipsContainer}>
-          {data.savingTips.map((tip, index) => (
-            <View key={index} style={styles.tipCard}>
-              <View style={styles.tipIconWrapper}>
-                <MaterialCommunityIcons name="lightbulb-on" size={20} color={palette.voltYellowDark} />
-              </View>
-              <Text style={styles.tipText}>{tip}</Text>
-            </View>
-          ))}
-        </View>
+        {isTipsMode && (
+          <>
+            <Text style={styles.sectionTitle}>Recommended Tips</Text>
+            <View style={styles.tipsContainer}>
+              {data.savingTips.map((tip, index) => {
+                const isAlert = tip.category === "alert";
+                const isMaintenance = tip.category === "maintenance";
+                
+                const categoryColor = isAlert 
+                  ? palette.criticalRed 
+                  : isMaintenance 
+                    ? palette.thermalOrange 
+                    : palette.safeGreenDark;
+                    
+                const iconName = isAlert 
+                  ? "alert-circle-outline" 
+                  : isMaintenance 
+                    ? "wrench-outline" 
+                    : "lightbulb-on-outline";
+                    
+                const iconBgColor = categoryColor + "15";
+                const categoryLabel = isAlert 
+                  ? "Alert" 
+                  : isMaintenance 
+                    ? "Maintenance" 
+                    : "Energy Saving";
 
+                return (
+                  <View key={index} style={[styles.tipCard, { borderLeftWidth: 4, borderLeftColor: categoryColor }]}>
+                    <View style={[styles.tipIconWrapper, { backgroundColor: iconBgColor }]}>
+                      <MaterialCommunityIcons name={iconName} size={20} color={categoryColor} />
+                    </View>
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={[styles.tipCategoryText, { color: categoryColor }]}>
+                        {categoryLabel}
+                      </Text>
+                      <Text style={styles.tipText}>{tip.text}</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </>
+        )}
       </ScrollView>
     </View>
   );
@@ -260,6 +309,13 @@ function useStyles() {
       color: theme.foreground,
       fontFamily: Typography.fontFamily,
       lineHeight: fontSizes.sm * 1.4,
+    },
+    tipCategoryText: {
+      fontSize: fontSizes.xs,
+      fontWeight: Typography.fontWeights.bold,
+      fontFamily: Typography.fontFamily,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
     },
   });
 }

@@ -8,8 +8,13 @@ import { ENERGY } from "@/constants/energyConstants";
 // Settings Store (Zustand + MMKV)
 // ─────────────────────────────────────────────────────────────────────────────
 
+type ThemeMode = "system" | "light" | "dark";
+
 interface SettingsState {
   hydrated: boolean;
+
+  // Appearance
+  themeMode: ThemeMode;
 
   // ESP32 connection
   esp32Ip: string;
@@ -31,6 +36,7 @@ interface SettingsState {
 
   // Actions
   setHydrated: (value: boolean) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setEsp32Ip: (ip: string) => void;
   setEsp32Port: (port: number) => void;
   setMonthlyBudget: (budget: number) => void;
@@ -58,6 +64,8 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       hydrated: false,
 
+      themeMode: "system",
+
       esp32Ip: "192.168.1.100",
       esp32Port: 80,
 
@@ -73,6 +81,7 @@ export const useSettingsStore = create<SettingsState>()(
       dashboardRefreshMs: ENERGY.POLLING_INTERVAL_MS,
 
       setHydrated: (value) => set({ hydrated: value }),
+      setThemeMode: (mode) => set({ themeMode: mode }),
       setEsp32Ip: (ip) => set({ esp32Ip: ip }),
       setEsp32Port: (port) => set({ esp32Port: port }),
       setMonthlyBudget: (budget) => set({ monthlyBudget: budget }),

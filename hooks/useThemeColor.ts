@@ -5,11 +5,15 @@
 
 import { Colors } from "@/constants/theme";
 import { useColorScheme } from "@/hooks/useColorScheme";
+import { useSettingsStore } from "@/store/useSettingsStore";
 
 export function useThemeColor() {
-  const colorScheme = useColorScheme();
+  const systemColorScheme = useColorScheme();
+  const themeMode = useSettingsStore((state) => state.themeMode);
 
-  if (colorScheme === "dark") {
+  const activeMode = themeMode === "system" ? systemColorScheme : themeMode;
+
+  if (activeMode === "dark") {
     return Colors.dark;
   } else {
     return Colors.light;

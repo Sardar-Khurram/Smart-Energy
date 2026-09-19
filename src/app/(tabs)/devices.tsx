@@ -2,7 +2,7 @@ import React from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useGetDevices } from "@/api/energy.service";
+import { useGetDevices, useFirebaseLiveData } from "@/api/energy.service";
 import CircularGauge from "@/components/charts/CircularGauge";
 import CommonHeader from "@/components/headers/CommonHeader";
 import DeviceItem from "@/components/ui/DeviceItem";
@@ -14,9 +14,10 @@ export default function DevicesScreen() {
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
   
-  const { data: devices, isLoading } = useGetDevices();
+  const { data: devices, isLoading, isError } = useGetDevices();
+  const { data: liveData } = useFirebaseLiveData("energy");
 
-  if (isLoading || !devices) {
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
@@ -24,8 +25,52 @@ export default function DevicesScreen() {
     );
   }
 
-  const activeDevices = devices.filter(d => d.isOn);
-  const totalPower = activeDevices.reduce((sum, d) => sum + d.power, 0);
+  if (isError || !devices) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load devices.</Text>
+      </View>
+    );
+  }
+
+  // Since the hardware only has 1 main sensor measuring TOTAL power,
+  // we build a "virtual estimator" to guess which bulb is on.
+  const totalPower = liveData?.power || 0;
+  
+  let bulb1Power = 0;
+  let bulb2Power = 0;
+  
+  if (totalPower > 20) { // Noise threshold
+    // If power is > 65W, it means both 44W bulbs are on (total ~88W)
+    if (totalPower > 65) {
+      bulb1Power = totalPower / 2;
+      bulb2Power = totalPower / 2;
+    } else {
+      // If power is around 43-44W, assume only Bulb 1 is turned on
+      bulb1Power = totalPower;
+      bulb2Power = 0;
+    }
+  }
+
+  const hardcodedDevices = [
+    {
+      id: "bulb-1",
+      device: "Room Bulb 1",
+      power: bulb1Power,
+      icon: "lightbulb-on",
+      isOn: bulb1Power > 0,
+    },
+    {
+      id: "bulb-2",
+      device: "Room Bulb 2",
+      power: bulb2Power,
+      icon: "lightbulb-outline",
+      isOn: bulb2Power > 0,
+    }
+  ];
+
+  const activeDevices = hardcodedDevices.filter(d => d.isOn);
+  const inactiveDevices = hardcodedDevices.filter(d => !d.isOn);
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
@@ -66,12 +111,15 @@ export default function DevicesScreen() {
         <View style={styles.listContainer}>
           <Text style={styles.sectionTitle}>Standby / Off</Text>
           <View style={styles.card}>
-            {devices.filter(d => !d.isOn).map((device, index, arr) => (
+            {inactiveDevices.map((device, index, arr) => (
               <View key={device.id}>
                 <DeviceItem device={device} totalPower={totalPower} />
                 {index < arr.length - 1 && <View style={styles.divider} />}
               </View>
             ))}
+            {inactiveDevices.length === 0 && (
+              <Text style={styles.emptyText}>All bulbs are currently ON.</Text>
+            )}
           </View>
         </View>
 

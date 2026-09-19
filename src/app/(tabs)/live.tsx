@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useGetLiveData } from "@/api/energy.service";
+import { useGetLiveData, useFirebaseLiveData } from "@/api/energy.service";
 import LineChart from "@/components/charts/LineChart";
 import CommonHeader from "@/components/headers/CommonHeader";
 import LivePulse from "@/components/dashboard/LivePulse";
@@ -20,28 +20,48 @@ export default function LiveMonitorScreen() {
   const styles = useStyles();
   
   const [activeTab, setActiveTab] = useState<MetricTab>("power");
-  const { data, isLoading } = useGetLiveData();
   
-  // In a real app, you would maintain an array of historical points in state or store
-  // Here we mock a history array for the chart based on the current live data
-  const chartData = React.useMemo(() => {
-    if (!data) return [];
-    
-    // Generate 20 fake historical points leading up to current value for demonstration
-    const points = [];
-    let baseValue = data[activeTab];
-    const variance = activeTab === "power" ? 100 : activeTab === "voltage" ? 5 : 0.5;
-    
-    for (let i = 0; i < 20; i++) {
-      points.push({
-        value: Math.max(0, baseValue + (Math.random() * variance * 2 - variance)),
-        label: i % 4 === 0 ? "10:0" + i : ""
+  // Use Firebase for true real-time updates
+  const { data, isLoading, isError } = useFirebaseLiveData("energy");
+  
+  // State to hold real historical data points
+  const [history, setHistory] = useState<{ power: any[], voltage: any[], current: any[] }>({
+    power: [],
+    voltage: [],
+    current: []
+  });
+
+  // Accumulate data when it changes
+  React.useEffect(() => {
+    if (data) {
+      setHistory(prev => {
+        const MAX_POINTS = 30;
+        
+        const newPoint = (val: number, label: string) => ({ value: val, label });
+        
+        const updateBuffer = (buffer: any[], newValue: number) => {
+          const updated = [...buffer, newPoint(newValue, data.time)];
+          if (updated.length > MAX_POINTS) return updated.slice(updated.length - MAX_POINTS);
+          return updated;
+        };
+
+        return {
+          power: updateBuffer(prev.power, data.power),
+          voltage: updateBuffer(prev.voltage, data.voltage),
+          current: updateBuffer(prev.current, data.current)
+        };
       });
     }
-    // Add current live point at the end
-    points.push({ value: data[activeTab], label: "Now" });
-    return points;
-  }, [data, activeTab]);
+  }, [data]);
+
+  const chartData = React.useMemo(() => {
+    const dataPoints = history[activeTab];
+    if (dataPoints.length === 0 && data) {
+        // Fallback if history is empty but we have data (initial load)
+        return [{ value: data[activeTab], label: "Now" }];
+    }
+    return dataPoints;
+  }, [history, activeTab, data]);
 
   const getChartColor = () => {
     if (activeTab === "voltage") return METRIC_COLORS.voltage.color;
@@ -55,13 +75,31 @@ export default function LiveMonitorScreen() {
     return "Power (W)";
   };
 
-  if (isLoading || !data) {
+  if (isLoading && history[activeTab].length === 0) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
       </View>
     );
   }
+
+  if (isError && history[activeTab].length === 0) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load live data.</Text>
+      </View>
+    );
+  }
+
+  const displayData = data || (history[activeTab].length > 0 ? {
+    power: history.power[history.power.length - 1].value,
+    voltage: history.voltage[history.voltage.length - 1].value,
+    current: history.current[history.current.length - 1].value,
+    temperature: 0, // Not tracked in history buffer yet
+    time: history.power[history.power.length - 1].label
+  } : null);
+
+  if (!displayData) return null;
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
@@ -100,9 +138,9 @@ export default function LiveMonitorScreen() {
           <View style={styles.chartHeader}>
             <Text style={styles.chartTitle}>{getActiveTabLabel()}</Text>
             <Text style={[styles.liveValue, { color: getChartColor() }]}>
-              {activeTab === "power" ? formatWatts(data.power) : 
-               activeTab === "voltage" ? formatVoltage(data.voltage) : 
-               formatCurrent(data.current)}
+              {activeTab === "power" ? formatWatts(displayData.power) : 
+               activeTab === "voltage" ? formatVoltage(displayData.voltage) : 
+               formatCurrent(displayData.current)}
             </Text>
           </View>
           
@@ -118,10 +156,10 @@ export default function LiveMonitorScreen() {
 
         {/* Current Values Grid */}
         <View style={styles.valuesGrid}>
-          <ValueCard title="Voltage" value={formatVoltage(data.voltage)} color={METRIC_COLORS.voltage.color} />
-          <ValueCard title="Current" value={formatCurrent(data.current)} color={METRIC_COLORS.current.color} />
-          <ValueCard title="Power" value={formatWatts(data.power)} color={METRIC_COLORS.power.color} />
-          <ValueCard title="Temp" value={formatTemp(data.temperature)} color={METRIC_COLORS.temperature.color} />
+          <ValueCard title="Voltage" value={formatVoltage(displayData.voltage)} color={METRIC_COLORS.voltage.color} />
+          <ValueCard title="Current" value={formatCurrent(displayData.current)} color={METRIC_COLORS.current.color} />
+          <ValueCard title="Power" value={formatWatts(displayData.power)} color={METRIC_COLORS.power.color} />
+          <ValueCard title="Temp" value={formatTemp(displayData.temperature || 0)} color={METRIC_COLORS.temperature.color} />
         </View>
 
         {/* Status Section */}
@@ -130,17 +168,17 @@ export default function LiveMonitorScreen() {
           <View style={styles.statusCard}>
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>ESP32 Controller</Text>
-              <StatusBadge status="online" />
+              <StatusBadge status={isError ? "offline" : "online"} />
             </View>
             <View style={styles.divider} />
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>Power Sensor (ACS712)</Text>
-              <StatusBadge status="online" />
+              <StatusBadge status={isError ? "offline" : "online"} />
             </View>
             <View style={styles.divider} />
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>Last Updated</Text>
-              <Text style={styles.timeText}>{data.time}</Text>
+              <Text style={styles.timeText}>{displayData.time}</Text>
             </View>
           </View>
         </View>
@@ -149,6 +187,7 @@ export default function LiveMonitorScreen() {
     </View>
   );
 }
+
 
 // Subcomponents
 

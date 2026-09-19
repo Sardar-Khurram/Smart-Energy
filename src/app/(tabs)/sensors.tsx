@@ -15,12 +15,20 @@ export default function SensorsScreen() {
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
   
-  const { data: status, isLoading } = useGetSensorStatus();
+  const { data: status, isLoading, isError } = useGetSensorStatus();
 
-  if (isLoading || !status) {
+  if (isLoading) {
     return (
       <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
         <ActivityIndicator size="large" color={theme.primary} />
+      </View>
+    );
+  }
+
+  if (isError || !status) {
+    return (
+      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+        <Text style={{ color: theme.destructive }}>Failed to load sensor status.</Text>
       </View>
     );
   }
