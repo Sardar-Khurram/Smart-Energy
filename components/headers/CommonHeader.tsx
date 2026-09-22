@@ -1,10 +1,11 @@
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import React from "react";
-import { StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
+import { Image, StyleSheet, Text, TouchableOpacity, View, ViewStyle } from "react-native";
 
 import { Typography, useResponsiveTokens } from "@/constants/theme";
 import { useThemeColor } from "@/hooks/useThemeColor";
+import { useSettingsStore } from "@/store/useSettingsStore";
 
 type FeatherIconName = React.ComponentProps<typeof Feather>["name"];
 
@@ -16,19 +17,27 @@ interface CommonHeaderProps {
   showBack?: boolean;
   rightAction?: { icon: FeatherIconName; onPress: () => void; badge?: number };
   rightElement?: React.ReactNode;
+  showProfile?: boolean;
 }
 
 export function CommonHeader({
-  title, subtitle, onBackPress, style, showBack = true, rightAction, rightElement,
+  title, subtitle, onBackPress, style, showBack = true, rightAction, rightElement, showProfile = true,
 }: CommonHeaderProps) {
   const styles = useStyles();
   const theme = useThemeColor();
   const { layout } = useResponsiveTokens();
+  const { profileImage, profileName } = useSettingsStore();
 
   const handleBackPress = () => {
     if (onBackPress) onBackPress();
     else router.back();
   };
+
+  const handleProfilePress = () => {
+    router.push("/(tabs)/settings");
+  };
+
+  const initial = (profileName?.trim()?.[0] || "U").toUpperCase();
 
   return (
     <View style={[styles.header, style]}>
@@ -54,6 +63,22 @@ export function CommonHeader({
             ) : null}
           </TouchableOpacity>
         ) : null}
+
+        {showProfile && (
+          <TouchableOpacity 
+            style={styles.profileBtn} 
+            onPress={handleProfilePress} 
+            activeOpacity={0.8}
+          >
+            {profileImage ? (
+              <Image source={{ uri: profileImage }} style={styles.avatarImg} />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarInitial}>{initial}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -91,6 +116,34 @@ function useStyles() {
       paddingHorizontal: 3, borderWidth: 1.5, borderColor: theme.background,
     },
     badgeText: { fontSize: fontSizes.xxs, fontWeight: Typography.fontWeights.bold, color: theme.destructiveForeground, fontFamily: Typography.fontFamily },
+    profileBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: theme.card,
+      borderWidth: 1.5,
+      borderColor: theme.primary,
+      overflow: "hidden",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarImg: {
+      width: "100%",
+      height: "100%",
+    },
+    avatarPlaceholder: {
+      width: "100%",
+      height: "100%",
+      backgroundColor: theme.primary,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    avatarInitial: {
+      fontSize: fontSizes.sm,
+      fontWeight: Typography.fontWeights.bold,
+      color: theme.primaryForeground,
+      fontFamily: Typography.fontFamily,
+    },
   });
 }
 

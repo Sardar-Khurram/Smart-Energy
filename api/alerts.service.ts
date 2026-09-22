@@ -6,28 +6,38 @@ import { API_URL } from "@/constants/variables";
 import type { AlertItem } from "@/types/energy";
 
 export async function getAlerts(): Promise<AlertItem[]> {
-  console.log(`[getAlerts] Fetching all alerts/tips`);
-  const response = await protectedFetch(`${API_URL}/tips/all`, {
-    method: "GET",
-  });
+  try {
+    const response = await protectedFetch(`${API_URL}/tips/all`, {
+      method: "GET",
+    });
 
-  const json = await response.json();
+    if (response.ok) {
+      const json = await response.json();
+      if (Array.isArray(json?.data) && json.data.length > 0) {
+        return json.data.map((tip: any, index: number) => {
+          const cat = (tip.category || "").toLowerCase();
+          const type = cat.includes("alert") || cat.includes("danger")
+            ? ("danger" as const)
+            : cat.includes("maintenance") || cat.includes("warning")
+              ? ("warning" as const)
+              : ("info" as const);
 
-  if (response.ok) {
-    return (json.data || []).map((tip: any, index: number) => ({
-      id: tip.id?.toString() || index.toString(),
-      type: tip.category === "alert"
-        ? "danger"
-        : tip.category === "maintenance"
-          ? "warning"
-          : "info",
-      msg: tip.tip_text,
-      timestamp: tip.generated_at,
-      read: false,
-    }));
+          return {
+            id: tip.id?.toString() || index.toString(),
+            type,
+            msg: tip.tip_text,
+            timestamp: tip.generated_at || new Date().toISOString(),
+            read: false,
+          };
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("getAlerts API error, using safe fallback", error);
   }
 
-  throw new Error(json?.message ?? "Failed to get alerts.");
+  // Return empty array when server has no alerts or is unreachable
+  return [];
 }
 
 export function useGetAlerts() {

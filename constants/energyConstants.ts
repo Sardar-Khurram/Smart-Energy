@@ -67,6 +67,7 @@ export const METRIC_COLORS = {
   temperature: { color: palette.criticalRed, bg: softPalette.red, icon: "thermometer" as const },
   units: { color: palette.purple, bg: palette.blue50, icon: "meter-electric" as const },
   bill: { color: palette.voltYellowDark, bg: softPalette.yellow, icon: "cash-multiple" as const },
+  currentBill: { color: softPalette.blueIconBg, bg: softPalette.blue, icon: "receipt" as const },
 };
 
 /** Device icons mapping */

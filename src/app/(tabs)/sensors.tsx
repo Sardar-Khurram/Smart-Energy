@@ -1,5 +1,5 @@
-import React from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback } from "react";
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 
@@ -15,7 +15,11 @@ export default function SensorsScreen() {
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
   
-  const { data: status, isLoading, isError } = useGetSensorStatus();
+  const { data: status, isLoading, isError, refetch, isRefetching } = useGetSensorStatus();
+
+  const onRefresh = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   if (isLoading) {
     return (
@@ -27,8 +31,32 @@ export default function SensorsScreen() {
 
   if (isError || !status) {
     return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: theme.destructive }}>Failed to load sensor status.</Text>
+      <View style={[styles.container, { paddingTop: top }]}>
+        <CommonHeader title="Hardware & Sensors" />
+        <ScrollView
+          contentContainerStyle={[styles.scrollContent, { flex: 1, justifyContent: "center", alignItems: "center" }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+        >
+          <Text style={{ color: theme.destructive, marginBottom: 12 }}>Failed to load sensor status.</Text>
+          <TouchableOpacity
+            onPress={() => refetch()}
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              backgroundColor: theme.primary,
+              borderRadius: 8,
+            }}
+          >
+            <Text style={{ color: theme.primaryForeground }}>Retry</Text>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
     );
   }
@@ -39,7 +67,18 @@ export default function SensorsScreen() {
     <View style={[styles.container, { paddingTop: top }]}>
       <CommonHeader title="Hardware & Sensors" />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={onRefresh}
+            colors={[theme.primary]}
+            tintColor={theme.primary}
+          />
+        }
+      >
         
         {/* Main Controller Card */}
         <View style={styles.section}>

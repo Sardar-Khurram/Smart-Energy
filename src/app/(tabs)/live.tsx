@@ -1,16 +1,35 @@
-import React, { useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useGetLiveData, useFirebaseLiveData } from "@/api/energy.service";
+import {
+  useFirebaseLiveData,
+  useGetDashboardData,
+  useGetLiveData,
+} from "@/api/energy.service";
 import LineChart from "@/components/charts/LineChart";
-import CommonHeader from "@/components/headers/CommonHeader";
 import LivePulse from "@/components/dashboard/LivePulse";
+import CommonHeader from "@/components/headers/CommonHeader";
 import StatusBadge from "@/components/ui/StatusBadge";
 import { METRIC_COLORS } from "@/constants/energyConstants";
 import { Typography, useResponsiveTokens } from "@/constants/theme";
 import { useThemeColor } from "@/hooks/useThemeColor";
-import { formatCurrent, formatTemp, formatVoltage, formatWatts } from "@/utils/formatters";
+import type { LiveDataPoint } from "@/types/energy";
+import {
+  formatCurrent,
+  formatTemp,
+  formatVoltage,
+  formatWatts,
+} from "@/utils/formatters";
 
 type MetricTab = "power" | "voltage" | "current";
 
@@ -18,50 +37,123 @@ export default function LiveMonitorScreen() {
   const theme = useThemeColor();
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
-  
+
   const [activeTab, setActiveTab] = useState<MetricTab>("power");
-  
-  // Use Firebase for true real-time updates
-  const { data, isLoading, isError } = useFirebaseLiveData("energy");
-  
-  // State to hold real historical data points
-  const [history, setHistory] = useState<{ power: any[], voltage: any[], current: any[] }>({
+  const [refreshing, setRefreshing] = useState(false);
+
+  // 1. Primary: Firebase Real-Time Listener
+  const {
+    data: firebaseData,
+    isLoading: isFirebaseLoading,
+    isError: isFirebaseError,
+  } = useFirebaseLiveData("energy");
+
+  // 2. Secondary: REST API Polling (/sensors/{id}/latest)
+  const {
+    data: apiData,
+    isLoading: isApiLoading,
+    isError: isApiError,
+    refetch: refetchLiveApi,
+  } = useGetLiveData();
+
+  // 3. Tertiary: Dashboard Cached Sensor Reading
+  const {
+    data: dashboardData,
+    refetch: refetchDashboard,
+  } = useGetDashboardData();
+
+  const isRealtime = Boolean(firebaseData && !isFirebaseError);
+  const isApiActive = Boolean(apiData && !isApiError);
+  const isOnline = isRealtime || isApiActive || dashboardData?.status === "online";
+
+  // Build the effective live data with multi-tier fallback
+  const displayData: LiveDataPoint = useMemo(() => {
+    if (firebaseData) return firebaseData;
+    if (apiData) return apiData;
+    if (dashboardData) {
+      return {
+        time: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        power: dashboardData.power || 0,
+        voltage: dashboardData.voltage || 0,
+        current: dashboardData.current || 0,
+        temperature: dashboardData.temperature || 0,
+      };
+    }
+    // Safe baseline placeholder if device/network is offline
+    return {
+      time: new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+      power: 0,
+      voltage: 0,
+      current: 0,
+      temperature: 0,
+    };
+  }, [firebaseData, apiData, dashboardData]);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.allSettled([refetchLiveApi(), refetchDashboard()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refetchLiveApi, refetchDashboard]);
+
+  // Buffer historical data points for the live chart
+  const [history, setHistory] = useState<{
+    power: any[];
+    voltage: any[];
+    current: any[];
+  }>({
     power: [],
     voltage: [],
-    current: []
+    current: [],
   });
 
-  // Accumulate data when it changes
-  React.useEffect(() => {
-    if (data) {
-      setHistory(prev => {
+  useEffect(() => {
+    if (displayData) {
+      setHistory((prev) => {
         const MAX_POINTS = 30;
-        
-        const newPoint = (val: number, label: string) => ({ value: val, label });
-        
+        const newPoint = (val: number, label: string) => ({
+          value: val,
+          label,
+        });
+
         const updateBuffer = (buffer: any[], newValue: number) => {
-          const updated = [...buffer, newPoint(newValue, data.time)];
-          if (updated.length > MAX_POINTS) return updated.slice(updated.length - MAX_POINTS);
+          const updated = [...buffer, newPoint(newValue, displayData.time)];
+          if (updated.length > MAX_POINTS) {
+            return updated.slice(updated.length - MAX_POINTS);
+          }
           return updated;
         };
 
         return {
-          power: updateBuffer(prev.power, data.power),
-          voltage: updateBuffer(prev.voltage, data.voltage),
-          current: updateBuffer(prev.current, data.current)
+          power: updateBuffer(prev.power, displayData.power),
+          voltage: updateBuffer(prev.voltage, displayData.voltage),
+          current: updateBuffer(prev.current, displayData.current),
         };
       });
     }
-  }, [data]);
+  }, [displayData.time, displayData.power, displayData.voltage, displayData.current]);
 
-  const chartData = React.useMemo(() => {
+  const chartData = useMemo(() => {
     const dataPoints = history[activeTab];
-    if (dataPoints.length === 0 && data) {
-        // Fallback if history is empty but we have data (initial load)
-        return [{ value: data[activeTab], label: "Now" }];
+    if (dataPoints.length === 0) {
+      // Baseline placeholder curve when starting up or offline
+      const baseline = displayData[activeTab] || 0;
+      return [
+        { value: baseline, label: "" },
+        { value: baseline, label: "" },
+        { value: baseline, label: displayData.time || "Now" },
+      ];
     }
     return dataPoints;
-  }, [history, activeTab, data]);
+  }, [history, activeTab, displayData]);
 
   const getChartColor = () => {
     if (activeTab === "voltage") return METRIC_COLORS.voltage.color;
@@ -75,61 +167,92 @@ export default function LiveMonitorScreen() {
     return "Power (W)";
   };
 
-  if (isLoading && history[activeTab].length === 0) {
+  // Only show full loader on initial cold start before any tier returns data
+  if (
+    isFirebaseLoading &&
+    isApiLoading &&
+    !dashboardData &&
+    history[activeTab].length === 0
+  ) {
     return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
+      <View
+        style={[
+          styles.container,
+          { paddingTop: top, justifyContent: "center", alignItems: "center" },
+        ]}
+      >
         <ActivityIndicator size="large" color={theme.primary} />
       </View>
     );
   }
 
-  if (isError && history[activeTab].length === 0) {
-    return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: theme.destructive }}>Failed to load live data.</Text>
-      </View>
-    );
-  }
-
-  const displayData = data || (history[activeTab].length > 0 ? {
-    power: history.power[history.power.length - 1].value,
-    voltage: history.voltage[history.voltage.length - 1].value,
-    current: history.current[history.current.length - 1].value,
-    temperature: 0, // Not tracked in history buffer yet
-    time: history.power[history.power.length - 1].label
-  } : null);
-
-  if (!displayData) return null;
-
   return (
     <View style={[styles.container, { paddingTop: top }]}>
-      <CommonHeader 
-        title="Live Monitor" 
+      <CommonHeader
+        title="Live Monitor"
         showBack={false}
-        rightElement={<LivePulse />}
+        rightElement={isRealtime ? <LivePulse /> : undefined}
       />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[theme.primary]}
+            tintColor={theme.primary}
+          />
+        }
+      >
+        {/* Offline / Standby Notice Banner */}
+        {!isRealtime && (
+          <View style={styles.fallbackNotice}>
+            <MaterialCommunityIcons
+              name="cloud-sync-outline"
+              size={18}
+              color={theme.primary}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fallbackNoticeTitle}>
+                {isOnline ? "Displaying Latest Saved Readings" : "Hardware Standby Mode"}
+              </Text>
+              <Text style={styles.fallbackNoticeText}>
+                {isOnline
+                  ? "Real-time socket idle. Showing latest sensor data."
+                  : "Device offline or waiting for readings. Pull down to refresh."}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.retryButton}
+              onPress={onRefresh}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.retryButtonText}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Metric Tabs Selector */}
         <View style={styles.tabContainer}>
-          <MetricTabButton 
-            title="Power" 
-            isActive={activeTab === "power"} 
+          <MetricTabButton
+            title="Power"
+            isActive={activeTab === "power"}
             color={METRIC_COLORS.power.color}
-            onPress={() => setActiveTab("power")} 
+            onPress={() => setActiveTab("power")}
           />
-          <MetricTabButton 
-            title="Voltage" 
-            isActive={activeTab === "voltage"} 
+          <MetricTabButton
+            title="Voltage"
+            isActive={activeTab === "voltage"}
             color={METRIC_COLORS.voltage.color}
-            onPress={() => setActiveTab("voltage")} 
+            onPress={() => setActiveTab("voltage")}
           />
-          <MetricTabButton 
-            title="Current" 
-            isActive={activeTab === "current"} 
+          <MetricTabButton
+            title="Current"
+            isActive={activeTab === "current"}
             color={METRIC_COLORS.current.color}
-            onPress={() => setActiveTab("current")} 
+            onPress={() => setActiveTab("current")}
           />
         </View>
 
@@ -138,16 +261,18 @@ export default function LiveMonitorScreen() {
           <View style={styles.chartHeader}>
             <Text style={styles.chartTitle}>{getActiveTabLabel()}</Text>
             <Text style={[styles.liveValue, { color: getChartColor() }]}>
-              {activeTab === "power" ? formatWatts(displayData.power) : 
-               activeTab === "voltage" ? formatVoltage(displayData.voltage) : 
-               formatCurrent(displayData.current)}
+              {activeTab === "power"
+                ? formatWatts(displayData.power)
+                : activeTab === "voltage"
+                  ? formatVoltage(displayData.voltage)
+                  : formatCurrent(displayData.current)}
             </Text>
           </View>
-          
+
           <View style={styles.chartWrapper}>
-            <LineChart 
-              data={chartData} 
-              color={getChartColor()} 
+            <LineChart
+              data={chartData}
+              color={getChartColor()}
               height={220}
               showDataPoints={false}
             />
@@ -156,10 +281,26 @@ export default function LiveMonitorScreen() {
 
         {/* Current Values Grid */}
         <View style={styles.valuesGrid}>
-          <ValueCard title="Voltage" value={formatVoltage(displayData.voltage)} color={METRIC_COLORS.voltage.color} />
-          <ValueCard title="Current" value={formatCurrent(displayData.current)} color={METRIC_COLORS.current.color} />
-          <ValueCard title="Power" value={formatWatts(displayData.power)} color={METRIC_COLORS.power.color} />
-          <ValueCard title="Temp" value={formatTemp(displayData.temperature || 0)} color={METRIC_COLORS.temperature.color} />
+          <ValueCard
+            title="Voltage"
+            value={formatVoltage(displayData.voltage)}
+            color={METRIC_COLORS.voltage.color}
+          />
+          <ValueCard
+            title="Current"
+            value={formatCurrent(displayData.current)}
+            color={METRIC_COLORS.current.color}
+          />
+          <ValueCard
+            title="Power"
+            value={formatWatts(displayData.power)}
+            color={METRIC_COLORS.power.color}
+          />
+          <ValueCard
+            title="Temp"
+            value={formatTemp(displayData.temperature || 0)}
+            color={METRIC_COLORS.temperature.color}
+          />
         </View>
 
         {/* Status Section */}
@@ -168,12 +309,12 @@ export default function LiveMonitorScreen() {
           <View style={styles.statusCard}>
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>ESP32 Controller</Text>
-              <StatusBadge status={isError ? "offline" : "online"} />
+              <StatusBadge status={isOnline ? "online" : "offline"} />
             </View>
             <View style={styles.divider} />
             <View style={styles.statusRow}>
               <Text style={styles.statusLabel}>Power Sensor (ACS712)</Text>
-              <StatusBadge status={isError ? "offline" : "online"} />
+              <StatusBadge status={isOnline ? "online" : "offline"} />
             </View>
             <View style={styles.divider} />
             <View style={styles.statusRow}>
@@ -182,7 +323,6 @@ export default function LiveMonitorScreen() {
             </View>
           </View>
         </View>
-
       </ScrollView>
     </View>
   );
@@ -351,6 +491,45 @@ function useStyles() {
       height: 1,
       backgroundColor: theme.border,
       marginVertical: spacing.sm,
+    },
+    fallbackNotice: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+      backgroundColor: theme.card,
+      marginHorizontal: spacing.md,
+      marginBottom: spacing.md,
+      padding: spacing.md,
+      borderRadius: radius.lg,
+      borderWidth: 0.5,
+      borderColor: theme.border,
+      ...shadows.xs,
+    },
+    fallbackNoticeTitle: {
+      fontSize: fontSizes.xs,
+      fontWeight: Typography.fontWeights.bold,
+      color: theme.foreground,
+      fontFamily: Typography.fontFamily,
+    },
+    fallbackNoticeText: {
+      fontSize: fontSizes.xxs,
+      color: theme.mutedForeground,
+      fontFamily: Typography.fontFamily,
+      marginTop: 2,
+    },
+    retryButton: {
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 5,
+      backgroundColor: theme.primary + "18",
+      borderRadius: radius.sm,
+      borderWidth: 0.5,
+      borderColor: theme.primary + "30",
+    },
+    retryButtonText: {
+      fontSize: fontSizes.xs,
+      fontWeight: Typography.fontWeights.bold,
+      color: theme.primary,
+      fontFamily: Typography.fontFamily,
     },
   });
 }

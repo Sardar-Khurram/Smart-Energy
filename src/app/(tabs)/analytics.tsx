@@ -1,22 +1,26 @@
-import React, { useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useGetAnalytics } from "@/api/energy.service";
 import BarChart from "@/components/charts/BarChart";
 import CommonHeader from "@/components/headers/CommonHeader";
 import { Typography, useResponsiveTokens } from "@/constants/theme";
 import { useThemeColor } from "@/hooks/useThemeColor";
-import type { AnalyticsPeriod } from "@/types/energy";
+import type { AnalyticsPeriod, MetricGraphData } from "@/types/energy";
 
 export default function AnalyticsScreen() {
   const theme = useThemeColor();
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
-  
+
   const [period, setPeriod] = useState<AnalyticsPeriod>("daily");
-  const { data, isLoading, isError } = useGetAnalytics(period);
+  const { data, isLoading, isError, refetch, isRefetching } = useGetAnalytics(period);
+
+  const onRefresh = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   if (isLoading) {
     return (
@@ -28,27 +32,55 @@ export default function AnalyticsScreen() {
 
   if (isError || !data) {
     return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: theme.destructive }}>Failed to load analytics data.</Text>
+      <View style={[styles.container, { paddingTop: top }]}>
+        <CommonHeader title="Analytics" showBack={false} />
+        <ScrollView
+          contentContainerStyle={[
+            styles.scrollContent,
+            { flex: 1, justifyContent: "center", alignItems: "center" },
+          ]}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+        >
+          <Text style={{ color: theme.destructive, marginBottom: 12 }}>Failed to load analytics data.</Text>
+          <TouchableOpacity
+            onPress={() => refetch()}
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              backgroundColor: theme.primary,
+              borderRadius: 8,
+            }}
+          >
+            <Text style={{ color: theme.primaryForeground }}>Retry</Text>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
     );
   }
-
-  // Format data for Gifted Charts
-  const chartData = data.data.map(item => ({
-    value: item.units,
-    label: item.label,
-    frontColor: item.units === data.highest.units ? theme.primary : theme.primary + "60",
-  }));
-
-  const isPositiveChange = data.changePercent > 0;
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
       <CommonHeader title="Analytics" showBack={false} />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={onRefresh}
+            colors={[theme.primary]}
+            tintColor={theme.primary}
+          />
+        }
+      >
         {/* Period Selector */}
         <View style={styles.periodSelector}>
           <PeriodButton title="Daily" isActive={period === "daily"} onPress={() => setPeriod("daily")} />
@@ -56,98 +88,169 @@ export default function AnalyticsScreen() {
           <PeriodButton title="Monthly" isActive={period === "monthly"} onPress={() => setPeriod("monthly")} />
         </View>
 
-        {/* Main Chart Card */}
-        <View style={styles.chartCard}>
-          <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>Energy Consumption</Text>
-            <View style={[styles.changeBadge, { backgroundColor: isPositiveChange ? theme.destructive + "20" : theme.success + "20" }]}>
-              <MaterialCommunityIcons 
-                name={isPositiveChange ? "trending-up" : "trending-down"} 
-                size={14} 
-                color={isPositiveChange ? theme.destructive : theme.success} 
-              />
-              <Text style={[styles.changeText, { color: isPositiveChange ? theme.destructive : theme.success }]}>
-                {Math.abs(data.changePercent)}%
+        {/* Weekly Month Indicator Banner */}
+        {period === "weekly" && (
+          <View style={styles.weeklyBanner}>
+            <MaterialCommunityIcons name="calendar-month-outline" size={18} color={theme.primary} />
+            <Text style={styles.weeklyBannerText}>
+              Showing Weekly Breakdown for{" "}
+              <Text style={{ fontWeight: Typography.fontWeights.bold, color: theme.primary }}>
+                {new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" })}
               </Text>
-            </View>
+            </Text>
           </View>
-          
-          <Text style={styles.totalUnits}>{data.total} <Text style={styles.unitText}>kWh</Text></Text>
-          <Text style={styles.subtitle}>Total this {period === "daily" ? "week" : period === "weekly" ? "month" : "year"}</Text>
+        )}
 
-          <View style={styles.chartWrapper}>
-            <BarChart data={chartData} height={200} color={theme.primary} />
+        {/* Monthly Notice Banner */}
+        {period === "monthly" && (
+          <View style={styles.monthlyNotice}>
+            <MaterialCommunityIcons name="information-outline" size={18} color={theme.primary} />
+            <Text style={styles.monthlyNoticeText}>
+              Showing all 12 months. Only months with recorded readings display bars.
+            </Text>
           </View>
-        </View>
+        )}
 
-        {/* Insights Grid */}
-        <Text style={styles.sectionTitle}>Insights</Text>
-        <View style={styles.insightsGrid}>
-          <InsightCard 
-            title="Highest Usage" 
-            value={data.highest.units.toString()} 
-            unit="kWh" 
-            label={data.highest.label} 
-            icon="arrow-up-circle-outline" 
-            color={theme.destructive} 
-          />
-          <InsightCard 
-            title="Lowest Usage" 
-            value={data.lowest.units.toString()} 
-            unit="kWh" 
-            label={data.lowest.label} 
-            icon="arrow-down-circle-outline" 
-            color={theme.success} 
-          />
-          <InsightCard 
-            title="Average" 
-            value={data.average.toString()} 
-            unit="kWh" 
-            label={`per ${period === "daily" ? "day" : period === "weekly" ? "week" : "month"}`} 
-            icon="chart-bell-curve" 
-            color={theme.info} 
-          />
-        </View>
+        {/* 4 Analytics Graph Cards */}
+        <MetricGraphCard metric={data.energy} period={period} />
+        <MetricGraphCard metric={data.voltage} period={period} />
+        <MetricGraphCard metric={data.current} period={period} />
+        <MetricGraphCard metric={data.temperature} period={period} />
 
+        <View style={{ height: 20 }} />
       </ScrollView>
     </View>
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
 // Subcomponents
+// ─────────────────────────────────────────────────────────────────────────────
 
-function PeriodButton({ title, isActive, onPress }: { title: string, isActive: boolean, onPress: () => void }) {
+function PeriodButton({
+  title,
+  isActive,
+  onPress,
+}: {
+  title: string;
+  isActive: boolean;
+  onPress: () => void;
+}) {
   const styles = useStyles();
   const theme = useThemeColor();
-  
+
   return (
-    <TouchableOpacity 
-      style={[styles.periodButton, isActive && { backgroundColor: theme.primary }]} 
+    <TouchableOpacity
+      style={[styles.periodButton, isActive && { backgroundColor: theme.primary }]}
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <Text style={[styles.periodText, isActive && { color: theme.primaryForeground, fontWeight: Typography.fontWeights.bold }]}>
+      <Text
+        style={[
+          styles.periodText,
+          isActive && { color: theme.primaryForeground, fontWeight: Typography.fontWeights.bold },
+        ]}
+      >
         {title}
       </Text>
     </TouchableOpacity>
   );
 }
 
-function InsightCard({ title, value, unit, label, icon, color }: { title: string, value: string, unit: string, label: string, icon: string, color: string }) {
+function MetricGraphCard({
+  metric,
+  period,
+}: {
+  metric: MetricGraphData;
+  period: AnalyticsPeriod;
+}) {
   const styles = useStyles();
   const theme = useThemeColor();
-  
+
+  // Format data for Gifted Charts (value 0 renders as empty space/no bar)
+  const chartData = metric.data.map((item) => ({
+    value: Number(item.units.toFixed(2)),
+    label: item.label,
+    frontColor: metric.color,
+  }));
+
+  const currentMonthFull = new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  const currentMonthShort = new Date().toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  const currentYear = new Date().getFullYear();
+
+  const timeframeSubtitle =
+    period === "weekly"
+      ? `Weeks of ${currentMonthFull}`
+      : period === "daily"
+        ? "Days of Current Week (Mon – Sun)"
+        : `Year ${currentYear} (Jan – Dec)`;
+
+  const periodLabel =
+    period === "daily" ? "/ day" : period === "weekly" ? "/ week" : "/ month";
+
   return (
-    <View style={styles.insightCard}>
-      <View style={styles.insightHeader}>
-        <MaterialCommunityIcons name={icon as any} size={20} color={color} />
-        <Text style={styles.insightTitle}>{title}</Text>
+    <View style={styles.chartCard}>
+      {/* Card Header */}
+      <View style={styles.chartHeader}>
+        <View style={styles.headerLeft}>
+          <View style={[styles.iconBox, { backgroundColor: metric.color + "20" }]}>
+            <MaterialCommunityIcons name={metric.icon as any} size={20} color={metric.color} />
+          </View>
+          <View>
+            <Text style={styles.chartTitle}>{metric.title}</Text>
+            <View style={styles.subtitleRow}>
+              {period === "weekly" && (
+                <MaterialCommunityIcons name="calendar" size={13} color={metric.color} style={{ marginRight: 3 }} />
+              )}
+              <Text
+                style={[
+                  styles.cardSubtitle,
+                  period === "weekly" && { color: theme.foreground, fontWeight: "600" },
+                ]}
+              >
+                {timeframeSubtitle}
+              </Text>
+            </View>
+          </View>
+        </View>
+        <View style={[styles.badge, { backgroundColor: metric.color + "20" }]}>
+          <Text style={[styles.badgeText, { color: metric.color }]}>{metric.unit}</Text>
+        </View>
       </View>
-      <View style={styles.insightBody}>
-        <Text style={styles.insightValue}>{value}</Text>
-        <Text style={styles.insightUnit}>{unit}</Text>
+
+      {/* BarChart (automatic responsive widths for 4 weeks, 7 days, and 12 months) */}
+      <View style={styles.chartWrapper}>
+        <BarChart
+          data={chartData}
+          height={170}
+          color={metric.color}
+        />
       </View>
-      <Text style={styles.insightLabel}>{label}</Text>
+
+      {/* Card Footer: Prominently displaying Average */}
+      <View style={styles.cardFooter}>
+        <View style={styles.footerRow}>
+          <MaterialCommunityIcons name="chart-bell-curve" size={18} color={metric.color} />
+          <Text style={styles.footerLabel}>Average:</Text>
+          <Text style={styles.footerValue}>
+            {Number(metric.average).toFixed(2)}{" "}
+            <Text style={styles.footerUnit}>
+              {metric.unit} {periodLabel}
+            </Text>
+          </Text>
+        </View>
+
+        {period === "weekly" ? (
+          <View style={[styles.monthPill, { backgroundColor: metric.color + "18" }]}>
+            <MaterialCommunityIcons name="calendar-range" size={12} color={metric.color} />
+            <Text style={[styles.monthPillText, { color: metric.color }]}>{currentMonthShort}</Text>
+          </View>
+        ) : metric.total !== undefined && metric.unit === "kWh" ? (
+          <Text style={styles.footerTotal}>
+            Total: {Number(metric.total).toFixed(2)} {metric.unit}
+          </Text>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -159,7 +262,7 @@ function useStyles() {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: theme.background },
     scrollContent: { paddingBottom: spacing["2xl"], paddingTop: spacing.md },
-    
+
     periodSelector: {
       flexDirection: "row",
       backgroundColor: theme.card,
@@ -182,13 +285,13 @@ function useStyles() {
       fontFamily: Typography.fontFamily,
       fontWeight: Typography.fontWeights.medium,
     },
-    
+
     chartCard: {
       backgroundColor: theme.card,
       marginHorizontal: spacing.md,
       borderRadius: radius.xl,
       padding: spacing.lg,
-      marginBottom: spacing.xl,
+      marginBottom: spacing.lg,
       borderWidth: 0.5,
       borderColor: theme.border,
       ...shadows.sm,
@@ -197,102 +300,141 @@ function useStyles() {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: spacing.xs,
+      marginBottom: spacing.md,
+    },
+    headerLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.sm,
+    },
+    iconBox: {
+      width: 36,
+      height: 36,
+      borderRadius: radius.md,
+      justifyContent: "center",
+      alignItems: "center",
     },
     chartTitle: {
       fontSize: fontSizes.base,
-      fontWeight: Typography.fontWeights.medium,
-      color: theme.mutedForeground,
+      fontWeight: Typography.fontWeights.bold,
+      color: theme.foreground,
       fontFamily: Typography.fontFamily,
     },
-    changeBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
+    cardSubtitle: {
+      fontSize: fontSizes.xs,
+      color: theme.mutedForeground,
+      fontFamily: Typography.fontFamily,
+      marginTop: 1,
+    },
+    badge: {
       paddingHorizontal: spacing.sm,
       paddingVertical: 4,
       borderRadius: radius.full,
     },
-    changeText: {
+    badgeText: {
       fontSize: fontSizes.xs,
       fontWeight: Typography.fontWeights.bold,
       fontFamily: Typography.fontFamily,
     },
-    totalUnits: {
-      fontSize: 42,
-      fontWeight: Typography.fontWeights.bold,
-      color: theme.foreground,
-      fontFamily: Typography.fontFamily,
-    },
-    unitText: {
-      fontSize: fontSizes.lg,
-      fontWeight: Typography.fontWeights.medium,
-      color: theme.mutedForeground,
-    },
-    subtitle: {
-      fontSize: fontSizes.sm,
-      color: theme.mutedForeground,
-      fontFamily: Typography.fontFamily,
-      marginBottom: spacing.xl,
-    },
+
     chartWrapper: {
       marginLeft: -10,
+      marginVertical: spacing.xs,
     },
-    
-    sectionTitle: {
-      fontSize: fontSizes.h3,
-      fontWeight: Typography.fontWeights.bold,
-      color: theme.foreground,
-      fontFamily: Typography.fontFamily,
-      marginHorizontal: spacing.md,
-      marginBottom: spacing.md,
+
+    cardFooter: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: spacing.md,
+      paddingTop: spacing.md,
+      borderTopWidth: 0.5,
+      borderTopColor: theme.border,
     },
-    insightsGrid: {
-      paddingHorizontal: spacing.md,
-      gap: spacing.md,
-    },
-    insightCard: {
-      backgroundColor: theme.card,
-      borderRadius: radius.lg,
-      padding: spacing.md,
-      borderWidth: 0.5,
-      borderColor: theme.border,
-      ...shadows.xs,
-    },
-    insightHeader: {
+    footerRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: spacing.sm,
-      marginBottom: spacing.sm,
+      gap: 6,
     },
-    insightTitle: {
+    footerLabel: {
       fontSize: fontSizes.sm,
       color: theme.mutedForeground,
       fontFamily: Typography.fontFamily,
       fontWeight: Typography.fontWeights.medium,
     },
-    insightBody: {
-      flexDirection: "row",
-      alignItems: "baseline",
-      gap: 4,
-    },
-    insightValue: {
-      fontSize: fontSizes.h2,
+    footerValue: {
+      fontSize: fontSizes.base,
       fontWeight: Typography.fontWeights.bold,
       color: theme.foreground,
       fontFamily: Typography.fontFamily,
     },
-    insightUnit: {
-      fontSize: fontSizes.sm,
+    footerUnit: {
+      fontSize: fontSizes.xs,
+      color: theme.mutedForeground,
+      fontFamily: Typography.fontFamily,
+      fontWeight: Typography.fontWeights.medium,
+    },
+    footerTotal: {
+      fontSize: fontSizes.xs,
+      fontWeight: Typography.fontWeights.bold,
       color: theme.mutedForeground,
       fontFamily: Typography.fontFamily,
     },
-    insightLabel: {
+    weeklyBanner: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.xs,
+      backgroundColor: theme.primary + "15",
+      marginHorizontal: spacing.md,
+      marginBottom: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.lg,
+      borderWidth: 0.5,
+      borderColor: theme.primary + "30",
+    },
+    weeklyBannerText: {
       fontSize: fontSizes.xs,
-      color: theme.primary,
+      color: theme.foreground,
       fontFamily: Typography.fontFamily,
-      fontWeight: Typography.fontWeights.medium,
-      marginTop: spacing.xxs,
+      flex: 1,
+    },
+    monthlyNotice: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.xs,
+      backgroundColor: theme.card,
+      marginHorizontal: spacing.md,
+      marginBottom: spacing.md,
+      paddingHorizontal: spacing.md,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.lg,
+      borderWidth: 0.5,
+      borderColor: theme.border,
+    },
+    monthlyNoticeText: {
+      fontSize: fontSizes.xs,
+      color: theme.mutedForeground,
+      fontFamily: Typography.fontFamily,
+      flex: 1,
+    },
+    subtitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginTop: 2,
+    },
+    monthPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: spacing.sm,
+      paddingVertical: 3,
+      borderRadius: radius.full,
+    },
+    monthPillText: {
+      fontSize: fontSizes.xs,
+      fontWeight: Typography.fontWeights.bold,
+      fontFamily: Typography.fontFamily,
     },
   });
 }

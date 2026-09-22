@@ -1,5 +1,5 @@
-import React from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { useCallback } from "react";
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useGetDevices, useFirebaseLiveData } from "@/api/energy.service";
@@ -14,8 +14,12 @@ export default function DevicesScreen() {
   const { top } = useSafeAreaInsets();
   const styles = useStyles();
   
-  const { data: devices, isLoading, isError } = useGetDevices();
+  const { data: devices, isLoading, isError, refetch, isRefetching } = useGetDevices();
   const { data: liveData } = useFirebaseLiveData("energy");
+
+  const onRefresh = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   if (isLoading) {
     return (
@@ -27,8 +31,32 @@ export default function DevicesScreen() {
 
   if (isError || !devices) {
     return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: theme.destructive }}>Failed to load devices.</Text>
+      <View style={[styles.container, { paddingTop: top }]}>
+        <CommonHeader title="Connected Devices" />
+        <ScrollView
+          contentContainerStyle={[styles.scrollContent, { flex: 1, justifyContent: "center", alignItems: "center" }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={onRefresh}
+              colors={[theme.primary]}
+              tintColor={theme.primary}
+            />
+          }
+        >
+          <Text style={{ color: theme.destructive, marginBottom: 12 }}>Failed to load devices.</Text>
+          <TouchableOpacity
+            onPress={() => refetch()}
+            style={{
+              paddingHorizontal: 16,
+              paddingVertical: 8,
+              backgroundColor: theme.primary,
+              borderRadius: 8,
+            }}
+          >
+            <Text style={{ color: theme.primaryForeground }}>Retry</Text>
+          </TouchableOpacity>
+        </ScrollView>
       </View>
     );
   }
@@ -64,7 +92,7 @@ export default function DevicesScreen() {
       id: "bulb-2",
       device: "Room Bulb 2",
       power: bulb2Power,
-      icon: "lightbulb-outline",
+      icon: "lightbulb-on",
       isOn: bulb2Power > 0,
     }
   ];
@@ -74,9 +102,20 @@ export default function DevicesScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
-      <CommonHeader title="Devices & Appliances" />
+      <CommonHeader title="Connected Devices" />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={onRefresh}
+            colors={[theme.primary]}
+            tintColor={theme.primary}
+          />
+        }
+      >
         
         {/* Total Usage Gauge */}
         <View style={styles.gaugeContainer}>

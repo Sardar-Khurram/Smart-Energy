@@ -7,6 +7,7 @@ import { useThemeColor } from "@/hooks/useThemeColor";
 
 interface MetricCardProps {
   title: string;
+  subtitle?: string;
   value: string;
   unit: string;
   icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"];
@@ -16,7 +17,7 @@ interface MetricCardProps {
   style?: ViewStyle;
 }
 
-export default function MetricCard({ title, value, unit, icon, color, bgColor, onPress, style }: MetricCardProps) {
+export default function MetricCard({ title, subtitle, value, unit, icon, color, bgColor, onPress, style }: MetricCardProps) {
   const styles = useStyles();
   const theme = useThemeColor();
 
@@ -28,6 +29,7 @@ export default function MetricCard({ title, value, unit, icon, color, bgColor, o
       <Text style={[styles.value, { color }]}>{value}</Text>
       <Text style={styles.unit}>{unit}</Text>
       <Text style={styles.title}>{title}</Text>
+      {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
     </View>
   );
 
@@ -52,6 +54,12 @@ function useStyles() {
     title: {
       fontSize: fontSizes.sm, color: theme.foreground, fontWeight: Typography.fontWeights.medium,
       fontFamily: Typography.fontFamily, marginTop: spacing.xs,
+    },
+    subtitle: {
+      fontSize: fontSizes.xxs,
+      color: theme.mutedForeground,
+      fontFamily: Typography.fontFamily,
+      marginTop: spacing.xxs,
     },
   });
 }

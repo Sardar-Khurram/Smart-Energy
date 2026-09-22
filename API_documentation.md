@@ -1,405 +1,117 @@
-# Energy Monitoring System API Documentation
+Aapke current backend ke according billing ko simple words mein do parts mein samjhein:
 
-Welcome to the Energy Monitoring System API documentation. This document provides details about the available endpoints, their request formats, and exact response structures as returned by the controllers.
+1. Aaj tak ka actual bill — MTD
 
-## Base URL
-`http://your-domain/api`
+Agar aaj 15 September hai, system billing cycle ke start day se 15 September tak ke actual meter readings leta hai.
 
----
+Example:
 
-## Authentication
-Some endpoints require a secret key for access. This key can be provided via a query parameter or a request header.
+Billing cycle: 1 Sep → 30 Sep
+1–15 Sep actual consumption = 180 kWh
 
-*   **Query Parameter:** `?secret=YOUR_SYNC_SECRET`
-*   **Request Header:** `X-Sync-Secret: YOUR_SYNC_SECRET`
+Phir BillingTariffModel::calculateCost(180) chalaya jata hai.
 
----
+Agar tariff:
 
-## Response Format
-The API follows a standard response structure for all controller-based endpoints:
+0–100 units = Rs 22/unit
+101–300 units = Rs 32.5/unit
+301+ = Rs 45/unit
 
-### Success Response
-```json
-{
-  "status": "success",
-  "data": { ... },
-  "message": "Action completed successfully"
-}
-```
+To:
 
-### Error Response
-```json
-{
-  "status": "error",
-  "message": "Description of the error",
-  "code": 404
-}
-```
+First 100 units:
+100 × 22 = Rs 2,200
 
----
+Next 80 units:
+80 × 32.5 = Rs 2,600
 
-## 1. Devices
+Actual bill till 15 Sep:
+Rs 4,800
 
-### `GET /devices`
-Retrieve a list of all registered devices.
+Yani MTD bill = ab tak use hui actual units ka tariff ke according calculated bill.
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "1",
-      "device_id": "energy",
-      "device_name": "Main Meter",
-      "location": "Main Panel",
-      "status": "active",
-      "created_at": "2026-05-12 10:00:00",
-      "updated_at": "2026-05-12 10:00:00"
-    }
-  ],
-  "message": "Devices retrieved successfully"
-}
-```
+2. Month-end prediction
 
-### `GET /devices/{device_id}`
-Retrieve details for a specific device.
+Ab system dekhta hai:
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "id": "1",
-    "device_id": "energy",
-    "device_name": "Main Meter",
-    "location": "Main Panel",
-    "status": "active",
-    "created_at": "2026-05-12 10:00:00",
-    "updated_at": "2026-05-12 10:00:00"
-  },
-  "message": ""
-}
-```
+15 din mein actual usage = 180 kWh
 
-### `GET /devices/{device_id}/status`
-Retrieve the latest status and sensor reading for a specific device.
+Average daily usage:
+180 / 15 = 12 kWh/day
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "device": {
-      "id": "1",
-      "device_id": "energy",
-      "device_name": "Main Meter",
-      "location": "Main Panel",
-      "status": "active",
-      "created_at": "2026-05-12 10:00:00",
-      "updated_at": "2026-05-12 10:00:00"
-    },
-    "latest_reading": {
-      "id": "500",
-      "device_id": "energy",
-      "current": "1.45",
-      "voltage": "230.1",
-      "temperature": "35.2",
-      "power_watt": "333.645",
-      "energy": "12.5",
-      "kwh": "0.12",
-      "power": "0.33",
-      "recorded_at": "2026-05-12 12:00:00"
-    }
-  },
-  "message": ""
-}
-```
+Remaining days:
+30 - 15 = 15 days
 
----
+Expected remaining usage:
+12 × 15 = 180 kWh
 
-## 2. Sensors
+So:
 
-### `GET /sensors/latest`
-Retrieve the most recent reading for all devices.
+Predicted month-end consumption
+= 180 actual + 180 expected
+= 360 kWh
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "500",
-      "device_id": "energy",
-      "current": "1.45",
-      "voltage": "230.1",
-      "temperature": "35.2",
-      "power_watt": "333.645",
-      "energy": "12.5",
-      "kwh": "0.12",
-      "power": "0.33",
-      "recorded_at": "2026-05-12 12:00:00"
-    }
-  ],
-  "message": ""
-}
-```
+Ab 360 kWh ko dobara complete tariff calculation se pass kiya jata hai.
 
-### `GET /sensors/{device_id}/latest`
-Retrieve the latest reading for a specific device.
+Important: system simply Rs 4,800 × 2 nahi karta, because slab pricing progressive hai.
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "id": "500",
-    "device_id": "energy",
-    "current": "1.45",
-    "voltage": "230.1",
-    "temperature": "35.2",
-    "power_watt": "333.645",
-    "energy": "12.5",
-    "kwh": "0.12",
-    "power": "0.33",
-    "recorded_at": "2026-05-12 12:00:00"
-  },
-  "message": ""
-}
-```
+For 360 kWh:
 
-### `GET /sensors/{device_id}/history`
-Retrieve historical readings for a specific device.
-Query parameters: `?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=100`
+100 × 22 = Rs 2,200
+200 × 32.5 = Rs 6,500
+60 × 45 = Rs 2,700
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "500",
-      "device_id": "energy",
-      "current": "1.45",
-      "voltage": "230.1",
-      "temperature": "35.2",
-      "power_watt": "333.645",
-      "energy": "12.5",
-      "kwh": "0.12",
-      "power": "0.33",
-      "recorded_at": "2026-05-12 12:00:00"
-    }
-  ],
-  "message": ""
-}
-```
+Total = Rs 11,400
 
-### `GET /sensors/{device_id}/stats`
-Retrieve aggregated statistics.
-Query parameters: `?period=daily|weekly|monthly`
+So:
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "period": "daily",
-    "count": 144,
-    "avg_current": 1.25,
-    "max_current": 2.1,
-    "min_current": 0.5,
-    "avg_voltage": 229.5,
-    "avg_temperature": 34.0,
-    "avg_power": 286.875,
-    "max_power": 483.0
-  },
-  "message": ""
-}
-```
+Actual usage till 15th: 180 kWh
+Actual bill till 15th: Rs 4,800
+Average daily usage: 12 kWh/day
+Expected remaining usage: 180 kWh
+Predicted month-end usage: 360 kWh
+Predicted month-end bill: Rs 11,400
 
-### `POST /sensors/test-insert`
-Insert a manual test reading. **Requires Authentication.**
+Current backend ka flow:
 
-**Request Body:**
-```json
-{
-  "device_id": "energy",
-  "current": 1.2,
-  "voltage": 220.5,
-  "temperature": 32.0,
-  "kwh": 0.05,
-  "power": 0.0,
-  "energy": 10.5,
-  "recorded_at": "2026-05-12 15:00:00"
-}
-```
+Meter readings
+↓
+Actual kWh till current date
+↓
+Calculate actual bill
+↓
+Average daily usage
+↓
+Remaining days
+↓
+Predicted remaining kWh
+↓
+Actual kWh + predicted kWh
+↓
+Calculate complete bill again
+↓
+Predicted month-end bill
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "inserted_id": 501
-  },
-  "message": ""
-}
-```
+Ek important distinction bhi hai:
 
----
+Current code mein two different prediction mechanisms hain.
 
-## 3. Bills & Predictions
+MTD Forecast:
+"Ab tak ki consumption ko dekh kar month ke end tak bill kitna aa sakta hai?"
 
-### `GET /bills/all`
-Retrieve the latest bill prediction for each device.
+Ye BillingForecastService::forecast() handle karta hai.
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "10",
-      "device_id": "energy",
-      "month": "2026-05",
-      "predicted_kwh": "150.5",
-      "predicted_cost": "45.15",
-      "currency": "USD",
-      "generated_at": "2026-05-12 10:00:00"
-    }
-  ],
-  "message": ""
-}
-```
+AI /predict endpoint:
+"Latest 30 sensor readings aur AI analysis ke basis par future consumption kya ho sakti hai?"
 
-### `POST /bills/{device_id}/predict`
-Generate a new bill prediction using Gemini AI.
+Ye GeminiService use karta hai.
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": {
-    "device_id": "energy",
-    "month": "2026-05",
-    "predicted_kwh": 150.5,
-    "predicted_cost": 45.15,
-    "currency": "USD",
-    "generated_at": "2026-05-12 20:30:00",
-    "id": 11,
-    "summary": "Based on the last 30 readings, your usage is stable..."
-  },
-  "message": ""
-}
-```
+Agar product requirement ye hai ke:
 
-### `GET /bills/{device_id}/history`
-Retrieve historical predictions for a device.
-Query parameters: `?limit=12`
+"Today is the 15th. Show me mera ab tak ka actual bill, aur current consumption pattern ke according month ke end par expected bill kitna hoga."
 
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "11",
-      "device_id": "energy",
-      "month": "2026-05",
-      "predicted_kwh": "150.5",
-      "predicted_cost": "45.15",
-      "currency": "USD",
-      "generated_at": "2026-05-12 20:30:00"
-    }
-  ],
-  "message": ""
-}
-```
+To deterministic MTD forecast hi main calculation hai.
 
----
+Simple flow:
 
-## 4. AI Tips
-
-### `GET /tips/all`
-Retrieve the latest AI-generated tip for each device.
-
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "25",
-      "device_id": "energy",
-      "tip_text": "Consider turning off appliances during peak hours.",
-      "category": "energy saving",
-      "generated_at": "2026-05-12 10:00:00"
-    }
-  ],
-  "message": ""
-}
-```
-
-### `POST /tips/{device_id}/generate`
-Manually trigger new tips generation. **Requires Authentication.**
-
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "device_id": "energy",
-      "tip_text": "Your AC temperature is set too low.",
-      "category": "maintenance",
-      "generated_at": "2026-05-12 20:35:00",
-      "id": 26
-    }
-  ],
-  "message": ""
-}
-```
-
-### `GET /tips/{device_id}/history`
-Retrieve history of tips for a device.
-Query parameters: `?limit=20`
-
-**Response Example:**
-```json
-{
-  "status": "success",
-  "data": [
-    {
-      "id": "26",
-      "device_id": "energy",
-      "tip_text": "Your AC temperature is set too low.",
-      "category": "maintenance",
-      "generated_at": "2026-05-12 20:35:00"
-    }
-  ],
-  "message": ""
-}
-```
-
----
-
-## 5. Firebase Synchronization
-
-Endpoints for syncing data from Firebase. **Requires Authentication.** These return a non-standard success structure (no `data` wrapper).
-
-### `GET /sync/sensors`
-**Response:**
-```json
-{
-  "synced": 5,
-  "status": "ok"
-}
-```
-
-### `GET /sync/devices`
-**Response:**
-```json
-{
-  "synced": 2,
-  "status": "ok"
-}
-```
+Actual consumption → Actual bill + usage-rate projection → Predicted total consumption → Progressive tariff calculation → Predicted month-end bill

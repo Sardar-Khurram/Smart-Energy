@@ -16,8 +16,6 @@ export function useFirebaseLiveData(deviceId: string = "energy") {
   useEffect(() => {
     const sensorRef = ref(database, deviceId);
     
-    console.log(`[Firebase] Starting real-time listener for: ${deviceId}`);
-    
     const unsubscribe = onValue(
       sensorRef,
       (snapshot) => {

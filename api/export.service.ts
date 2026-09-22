@@ -25,7 +25,6 @@ export async function exportReport(
     if (isAndroidSave) {
       const permissions = await FileSystem.StorageAccessFramework.requestDirectoryPermissionsAsync();
       if (!permissions.granted) {
-        console.log("[exportReport] User cancelled directory picking");
         return;
       }
       userSelectedDirectoryUri = permissions.directoryUri;
@@ -39,12 +38,8 @@ export async function exportReport(
     if (startDate) url += `&start_date=${startDate}`;
     if (endDate) url += `&end_date=${endDate}`;
 
-    console.log(`[exportReport] Downloading report (${action}) from: ${url}`);
-
     // Download the file using Expo FileSystem (SDK 55 API)
     const downloadedFile = await File.downloadFileAsync(url, tempFile);
-
-    console.log(`[exportReport] Report downloaded to: ${downloadedFile.uri}`);
 
     // If it was an Android direct save, move it to the selected directory
     if (isAndroidSave && userSelectedDirectoryUri) {
@@ -62,7 +57,6 @@ export async function exportReport(
         });
         
         await downloadedFile.delete();
-        console.log(`[exportReport] Report copied to user directory: ${createdUri}`);
         return;
       } catch (moveError) {
         console.error("[exportReport] Failed to move file to selected directory:", moveError);

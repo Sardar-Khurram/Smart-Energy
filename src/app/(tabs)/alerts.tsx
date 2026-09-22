@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View, Alert } from "react-native";
+import React, { useCallback, useState } from "react";
+import { ActivityIndicator, Alert, FlatList, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
@@ -22,7 +22,11 @@ export default function AlertsScreen() {
   
   const [filter, setFilter] = useState<FilterType>("all");
   const [isGenerating, setIsGenerating] = useState(false);
-  const { data: alerts, isLoading, isError } = useGetAlerts();
+  const { data: alerts, isLoading, refetch, isRefetching } = useGetAlerts();
+
+  const onRefresh = useCallback(async () => {
+    await refetch();
+  }, [refetch]);
 
   const handleGenerateAlerts = async () => {
     try {
@@ -45,25 +49,21 @@ export default function AlertsScreen() {
     );
   }
 
-  if (isError || !alerts) {
-    return (
-      <View style={[styles.container, { paddingTop: top, justifyContent: "center", alignItems: "center" }]}>
-        <Text style={{ color: theme.destructive }}>Failed to load alerts.</Text>
-      </View>
-    );
-  }
-
-  const filteredAlerts = filter === "all" ? alerts : alerts.filter(a => a.type === filter);
+  const effectiveAlerts = alerts || [];
+  const filteredAlerts =
+    filter === "all"
+      ? effectiveAlerts
+      : effectiveAlerts.filter((a) => a.type === filter);
 
   return (
     <View style={[styles.container, { paddingTop: top }]}>
       <CommonHeader 
-        title="Alerts & Tips" 
+        title="Alerts" 
         showBack={false} 
         rightAction={{
           icon: "cpu", // Using Feather 'cpu' icon representing AI/Smart Analysis
           onPress: isGenerating ? () => {} : handleGenerateAlerts,
-          badge: alerts.filter(a => !a.read).length
+          badge: effectiveAlerts.filter(a => !a.read).length
         }}
       />
 
@@ -85,25 +85,66 @@ export default function AlertsScreen() {
         </View>
       )}
 
-      {filteredAlerts.length === 0 ? (
-        <View style={styles.emptyContainer}>
-          <MaterialCommunityIcons name="check-circle-outline" size={64} color={theme.success} />
-          <Text style={styles.emptyTitle}>All Clear!</Text>
-          <Text style={styles.emptyDesc}>No {filter !== "all" ? filter : ""} alerts to show at the moment.</Text>
-          <TouchableOpacity style={styles.generateButton} onPress={handleGenerateAlerts} disabled={isGenerating}>
-            <MaterialCommunityIcons name="robot-outline" size={20} color={theme.background} />
-            <Text style={styles.generateButtonText}>Generate AI Alerts</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={filteredAlerts}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <AlertItem alert={item} style={styles.alertItem} />}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <FlatList
+        data={filteredAlerts}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => <AlertItem alert={item} style={styles.alertItem} />}
+        contentContainerStyle={[
+          styles.listContent,
+          filteredAlerts.length === 0 && { flex: 1, justifyContent: "center" },
+        ]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={onRefresh}
+            colors={[theme.primary]}
+            tintColor={theme.primary}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <MaterialCommunityIcons name="bell-check-outline" size={64} color={theme.success} />
+            <Text style={styles.emptyTitle}>No Alerts</Text>
+            <Text style={styles.emptyDesc}>
+              {filter !== "all"
+                ? `No ${filter} alerts at the moment.`
+                : "System is operating normally. No alerts to show."}
+            </Text>
+            <View style={styles.emptyActionsRow}>
+              <TouchableOpacity
+                style={styles.refreshButton}
+                onPress={onRefresh}
+                disabled={isRefetching}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons
+                  name="refresh"
+                  size={18}
+                  color={theme.primaryForeground}
+                />
+                <Text style={styles.refreshButtonText}>
+                  {isRefetching ? "Refreshing..." : "Refresh"}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.generateButton}
+                onPress={handleGenerateAlerts}
+                disabled={isGenerating}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons
+                  name="robot-outline"
+                  size={18}
+                  color={theme.primaryForeground}
+                />
+                <Text style={styles.generateButtonText}>AI Alerts</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        }
+      />
     </View>
   );
 }
@@ -133,9 +174,6 @@ function FilterChip({ title, type, isActive, onPress }: { title: string, type: F
     </TouchableOpacity>
   );
 }
-
-// Need to import ScrollView for the horizontal filters
-import { ScrollView } from "react-native";
 
 function useStyles() {
   const theme = useThemeColor();
@@ -195,20 +233,42 @@ function useStyles() {
       textAlign: "center",
       marginBottom: spacing.xl,
     },
+    emptyActionsRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.md,
+    },
+    refreshButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: theme.card,
+      borderWidth: 1,
+      borderColor: theme.border,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
+      borderRadius: radius.full,
+      gap: spacing.xs,
+    },
+    refreshButtonText: {
+      color: theme.foreground,
+      fontFamily: Typography.fontFamily,
+      fontWeight: Typography.fontWeights.bold,
+      fontSize: fontSizes.sm,
+    },
     generateButton: {
       flexDirection: "row",
       alignItems: "center",
       backgroundColor: theme.primary,
-      paddingHorizontal: spacing.xl,
-      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.sm,
       borderRadius: radius.full,
-      gap: spacing.sm,
+      gap: spacing.xs,
     },
     generateButtonText: {
-      color: theme.background,
+      color: theme.primaryForeground,
       fontFamily: Typography.fontFamily,
       fontWeight: Typography.fontWeights.bold,
-      fontSize: fontSizes.base,
+      fontSize: fontSizes.sm,
     },
     generatingOverlay: {
       flexDirection: "row",
