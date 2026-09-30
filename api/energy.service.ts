@@ -12,7 +12,6 @@ import type {
   BillingTariffConfig,
   BillPrediction,
   DashboardData,
-  DeviceUsage,
   LiveDataPoint,
   MetricGraphData,
   MtdBillingData,
@@ -70,10 +69,46 @@ export async function getDefaultDeviceId(): Promise<string> {
 // Dashboard Data
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Online/offline comes from the backend's freshness check on the latest reading
+ * (`is_online` / `connection_status`). `device.status` is only the device record's
+ * active/inactive flag and says nothing about connectivity.
+ */
+function resolveIsOnline(data: any): boolean {
+  if (typeof data?.is_online === "boolean") return data.is_online;
+  return data?.connection_status === "online";
+}
+
+function localDateString(d: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
+ * Units consumed today. `sensor_readings.kwh` is a cumulative register, so the
+ * per-day figure must come from the backend's delta-based daily series.
+ */
+async function fetchTodayUnits(
+  deviceId: string,
+  today: string,
+): Promise<number> {
+  const response = await protectedFetch(
+    `${API_URL}/sensors/${deviceId}/stats?period=daily`,
+    { method: "GET" },
+  );
+  if (!response.ok) return 0;
+  const json = await response.json();
+  const series = json?.data?.series;
+  if (!Array.isArray(series)) return 0;
+  const entry = series.find((item: any) => item.date === today);
+  const kwh = entry ? parseFloat(entry.kwh ?? "0") : 0;
+  return Number.isFinite(kwh) ? kwh : 0;
+}
+
 export async function getDashboardData(): Promise<DashboardData> {
   const deviceId = await getDefaultDeviceId();
-  let device: any = null;
   let latest_reading: any = null;
+  let isOnline = false;
 
   try {
     const endpoint = `${API_URL}/devices/${deviceId}/status`;
@@ -82,8 +117,8 @@ export async function getDashboardData(): Promise<DashboardData> {
     if (response.ok) {
       const json = await response.json();
       if (json && json.data) {
-        device = json.data.device;
         latest_reading = json.data.latest_reading;
+        isOnline = resolveIsOnline(json.data);
       }
     }
   } catch (err) {
@@ -93,57 +128,14 @@ export async function getDashboardData(): Promise<DashboardData> {
   let estimatedBill = 0;
   let currentBill = 0;
   let monthUnits = 0;
+  let serverToday: string | undefined;
   try {
-    const mtdEndpoint = `${API_URL}/bills/${deviceId}/mtd`;
-    debugLog(
-      "getDashboardData",
-      `Calling GET ${mtdEndpoint} (for MTD bill & units)`,
-    );
-    const mtdResp = await protectedFetch(mtdEndpoint, { method: "GET" });
-    if (mtdResp.ok) {
-      const mtdJson = await mtdResp.json();
-      if (mtdJson && mtdJson.data) {
-        const mtd = mtdJson.data;
-        monthUnits =
-          typeof mtd.mtd_units === "number"
-            ? mtd.mtd_units
-            : parseFloat(mtd.mtd_units || "0");
-        const rawBill = mtd.predicted_bill ?? mtd.mtd_bill ?? 0;
-        estimatedBill =
-          typeof rawBill === "number"
-            ? rawBill
-            : parseFloat(rawBill || "0");
-        const rawCurrentBill = mtd.mtd_bill ?? 0;
-        currentBill =
-          typeof rawCurrentBill === "number"
-            ? rawCurrentBill
-            : parseFloat(rawCurrentBill || "0");
-
-        if (typeof mtd.rate_per_kwh === "number" && mtd.rate_per_kwh > 0) {
-          useSettingsStore.getState().setTariffConfig({
-            ratePerKwh: mtd.rate_per_kwh,
-            tariffType: mtd.tariff_type,
-            currencySymbol: mtd.currency_symbol,
-          });
-        }
-      }
-    } else {
-      // Fallback to latest prediction history
-      const billEndpoint = `${API_URL}/bills/${deviceId}/history?limit=1`;
-      const billResp = await protectedFetch(billEndpoint, { method: "GET" });
-      if (billResp.ok) {
-        const billJson = await billResp.json();
-        const latestPrediction = billJson.data?.[0];
-        if (latestPrediction) {
-          const costRaw = latestPrediction.predicted_cost;
-          const kwhRaw = latestPrediction.predicted_kwh;
-          estimatedBill =
-            typeof costRaw === "number" ? costRaw : parseFloat(costRaw || "0");
-          currentBill = estimatedBill;
-          monthUnits =
-            typeof kwhRaw === "number" ? kwhRaw : parseFloat(kwhRaw || "0");
-        }
-      }
+    const mtd = await getMtdBilling(deviceId);
+    if (mtd) {
+      monthUnits = mtd.mtd_units;
+      estimatedBill = mtd.predicted_bill;
+      currentBill = mtd.mtd_bill;
+      serverToday = mtd.current_date || undefined;
     }
   } catch (error) {
     debugLog(
@@ -153,16 +145,30 @@ export async function getDashboardData(): Promise<DashboardData> {
     );
   }
 
+  let todayUnits = 0;
+  try {
+    todayUnits = await fetchTodayUnits(
+      deviceId,
+      serverToday ?? localDateString(),
+    );
+  } catch (error) {
+    debugLog(
+      "getDashboardData",
+      `⚠️ Today's units fetch FAILED (non-critical)`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+
   const result: DashboardData = {
     voltage: parseFloat(latest_reading?.voltage || "0"),
     current: parseFloat(latest_reading?.current || "0"),
     power: parseFloat(latest_reading?.power_watt || "0"),
     temperature: parseFloat(latest_reading?.temperature || "0"),
-    todayUnits: parseFloat(latest_reading?.kwh || "0"),
+    todayUnits: parseFloat(todayUnits.toFixed(2)),
     monthUnits,
     estimatedBill,
     currentBill,
-    status: device?.status === "active" ? "online" : "offline",
+    status: isOnline ? "online" : "offline",
   };
   debugLog("getDashboardData", `✅ FINAL RESULT →`, result);
   return result;
@@ -245,23 +251,9 @@ export async function getAnalytics(
 
   // 1. If backend already provides the real time-series array (ideal target):
   if (Array.isArray(raw.series) && raw.series.length > 0) {
-    const allMonths = [
-      "Jan",
-      "Feb",
-      "Mar",
-      "Apr",
-      "May",
-      "Jun",
-      "Jul",
-      "Aug",
-      "Sep",
-      "Oct",
-      "Nov",
-      "Dec",
-    ];
-    const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const monthWeeks = ["Week 1", "Week 2", "Week 3", "Week 4"];
-
+    // The backend already returns a complete, ordered series for every period:
+    // daily = Mon..Sun, weekly = Week 1..N (N depends on the month, 4 or 5),
+    // monthly = Jan..Dec. Empty intervals arrive as 0, so render it as-is.
     const buildFromSeries = (
       title: string,
       unit: string,
@@ -269,64 +261,10 @@ export async function getAnalytics(
       color: string,
       icon: string,
     ): MetricGraphData => {
-      let data: AnalyticsDay[] = [];
-
-      if (period === "monthly") {
-        // Guarantee all 12 months on X-axis: only recorded months have values, rest are 0 (empty bars)
-        data = allMonths.map((m, idx) => {
-          const found = raw.series.find((item: any) => {
-            const l = (item.label || item.month || item.date || "")
-              .toString()
-              .toLowerCase();
-            return (
-              l === m.toLowerCase() ||
-              l.startsWith(m.toLowerCase()) ||
-              parseInt(item.month, 10) === idx + 1
-            );
-          });
-          return {
-            label: m,
-            units: found
-              ? parseFloat(parseFloat(found[key] ?? 0).toFixed(2))
-              : 0,
-          };
-        });
-      } else if (period === "weekly") {
-        // Guarantee Week 1 - Week 4 on X-axis: only recorded weeks have values, rest are 0
-        data = monthWeeks.map((w, idx) => {
-          const found = raw.series.find((item: any) => {
-            const l = (item.label || item.week || "").toString().toLowerCase();
-            return l === w.toLowerCase() || l.includes((idx + 1).toString());
-          });
-          return {
-            label: w,
-            units: found
-              ? parseFloat(parseFloat(found[key] ?? 0).toFixed(2))
-              : 0,
-          };
-        });
-      } else if (period === "daily") {
-        // Guarantee Mon - Sun on X-axis: only recorded days have values, rest are 0
-        data = weekDays.map((day) => {
-          const found = raw.series.find((item: any) => {
-            const l = (item.label || item.day || item.date || "")
-              .toString()
-              .toLowerCase();
-            return l === day.toLowerCase() || l.startsWith(day.toLowerCase());
-          });
-          return {
-            label: day,
-            units: found
-              ? parseFloat(parseFloat(found[key] ?? 0).toFixed(2))
-              : 0,
-          };
-        });
-      } else {
-        data = raw.series.map((item: any) => ({
-          label: item.label || item.day || item.date || "",
-          units: parseFloat(parseFloat(item[key] ?? 0).toFixed(2)),
-        }));
-      }
+      const data: AnalyticsDay[] = raw.series.map((item: any) => ({
+        label: item.label || item.day || item.date || "",
+        units: parseFloat(parseFloat(item[key] ?? 0).toFixed(2)),
+      }));
 
       const nonZero = data.filter((d) => d.units > 0);
       const total = parseFloat(
@@ -424,105 +362,57 @@ export async function getAnalytics(
     return result;
   }
 
-  // 2. Interim fallback while backend developer implements series:
-  // Show actual reading only on recorded active periods, and 0 (empty bars) for unrecorded periods
-  const kwhUnits = stats.avg_power
-    ? parseFloat(((stats.avg_power * 24) / 1000).toFixed(2))
-    : 0;
-
-  const now = new Date();
-  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const currentDayName = dayNames[now.getDay()]; // e.g. "Sat"
-  const currentMonthIdx = now.getMonth(); // 0-based, e.g. 8 for Sep
-  const allMonths = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-
-  const buildMetricDataset = (
-    title: string,
-    unit: string,
-    activeVal: number,
-    color: string,
-    icon: string,
-  ): MetricGraphData => {
-    let data: AnalyticsDay[] = [];
+  // Backend has not returned a `series` array — no historical time-series is available.
+  // We intentionally return empty (zero-filled) buckets so the UI does NOT invent
+  // misleading values by painting a single live snapshot onto one bar.
+  // See docs/BACKEND_ANALYTICS_SPEC.md for the required backend response format.
+  const buildEmptyBuckets = (): AnalyticsDay[] => {
     if (period === "daily") {
-      const weekDays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-      data = weekDays.map((day) => ({
-        label: day,
-        units: day === currentDayName ? activeVal : 0,
-      }));
-    } else if (period === "weekly") {
-      const weeks = ["Week 1", "Week 2", "Week 3", "Week 4"];
-      const currentWeekNum = Math.min(Math.ceil(now.getDate() / 7), 4);
-      data = weeks.map((w, idx) => ({
-        label: w,
-        units: idx + 1 === currentWeekNum ? activeVal : 0,
-      }));
-    } else {
-      // Map all 12 months (Jan - Dec): only recorded month has value, unrecorded months show 0 (no bar)
-      data = allMonths.map((m, idx) => ({
-        label: m,
-        units: idx === currentMonthIdx ? activeVal : 0,
+      return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => ({
+        label,
+        units: 0,
       }));
     }
-
-    const total = activeVal;
-    const average = activeVal;
-
-    return { title, unit, average, total, data, color, icon };
+    if (period === "weekly") {
+      const now = new Date();
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+      return Array.from({ length: Math.ceil(daysInMonth / 7) }, (_, i) => ({
+        label: `Week ${i + 1}`,
+        units: 0,
+      }));
+    }
+    return [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ].map((label) => ({ label, units: 0 }));
   };
 
-  const energy = buildMetricDataset(
-    "Energy Consumption",
-    "kWh",
-    kwhUnits,
-    "#10B981",
-    "lightning-bolt",
-  );
-  const voltage = buildMetricDataset(
-    "Voltage",
-    "V",
-    stats.avg_voltage,
-    "#3B82F6",
-    "flash",
-  );
-  const current = buildMetricDataset(
-    "Current",
-    "A",
-    stats.avg_current,
-    "#F59E0B",
-    "current-ac",
-  );
-  const temperature = buildMetricDataset(
-    "Temperature",
-    "°C",
-    stats.avg_temperature,
-    "#EF4444",
-    "thermometer",
-  );
+  const buildEmptyMetric = (
+    title: string,
+    unit: string,
+    color: string,
+    icon: string,
+    hasTotal = false,
+  ): MetricGraphData => ({
+    title,
+    unit,
+    color,
+    icon,
+    average: 0,
+    ...(hasTotal ? { total: 0 } : {}),
+    data: buildEmptyBuckets(),
+  });
 
   const result: AnalyticsSummary = {
     period,
-    energy,
-    voltage,
-    current,
-    temperature,
+    energy: buildEmptyMetric("Energy Consumption", "kWh", "#10B981", "lightning-bolt", true),
+    voltage: buildEmptyMetric("Voltage", "V", "#3B82F6", "flash"),
+    current: buildEmptyMetric("Current", "A", "#F59E0B", "current-ac"),
+    temperature: buildEmptyMetric("Temperature", "°C", "#EF4444", "thermometer"),
     stats,
   };
 
-  console.log(`📊 [Analytics] Computed result:`, result);
+  console.log(`📊 [Analytics] Backend series missing — returning empty buckets. See docs/BACKEND_ANALYTICS_SPEC.md`);
   return result;
 }
 
@@ -593,7 +483,7 @@ export async function getBillingConfig(
 
 export async function getMtdBilling(
   deviceIdParam?: string,
-): Promise<MtdBillingData> {
+): Promise<MtdBillingData | null> {
   const deviceId = deviceIdParam || (await getDefaultDeviceId());
   const storeState = useSettingsStore.getState();
 
@@ -641,34 +531,12 @@ export async function getMtdBilling(
       }
     }
   } catch (err) {
-    debugLog("getMtdBilling", "⚠️ MTD request failed, using safe fallback", err);
+    debugLog("getMtdBilling", "⚠️ MTD request failed, returning null (no fabrication)", err);
   }
 
-  // Safe client fallback when offline or server returns 500/403
-  const now = new Date();
-  const currentDay = now.getDate();
-  const totalDaysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const remainingDays = Math.max(totalDaysInMonth - currentDay, 0);
-
-  return {
-    device_id: deviceId,
-    billing_period_start: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`,
-    billing_period_end: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${totalDaysInMonth}`,
-    current_date: now.toISOString().split("T")[0],
-    elapsed_days: currentDay,
-    total_days: totalDaysInMonth,
-    remaining_days: remainingDays,
-    mtd_units: 0,
-    avg_daily_units: 0,
-    mtd_bill: 0,
-    predicted_units: 0,
-    predicted_bill: 0,
-    remaining_estimated_bill: 0,
-    currency: "PKR",
-    currency_symbol: storeState.currencySymbol || "Rs.",
-    rate_per_kwh: storeState.ratePerKwh,
-    tariff_type: storeState.tariffType || "flat",
-  };
+  // Return null when offline — do NOT fabricate billing period dates or cycle info.
+  // The UI will show "Awaiting billing cycle sync" instead of guessed values.
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -678,49 +546,15 @@ export async function getMtdBilling(
 export async function getBillPrediction(): Promise<BillPrediction> {
   const deviceId = await getDefaultDeviceId();
 
-  // 1. Fetch deterministic MTD billing data (primary calculation source)
+  // 1. Deterministic MTD billing + end-of-cycle forecast (single source of truth)
   let mtdData: MtdBillingData | null = null;
   try {
     mtdData = await getMtdBilling(deviceId);
   } catch (err) {
-    debugLog("getBillPrediction", "⚠️ MTD billing fetch failed, attempting fallback", err);
+    debugLog("getBillPrediction", "⚠️ MTD billing fetch failed", err);
   }
 
-  // 2. Fetch AI prediction for summary/tips & rate fallback
-  let aiSummary: string = "";
-  let aiPredictedCost = 0;
-  let aiPredictedKwh = 0;
-  try {
-    const endpoint = `${API_URL}/bills/${deviceId}/predict`;
-    debugLog("getBillPrediction", `Calling POST ${endpoint}`);
-    const predResp = await protectedFetch(endpoint, { method: "POST" });
-    if (predResp.ok) {
-      const predJson = await predResp.json();
-      if (predJson.data) {
-        aiSummary = predJson.data.summary || "";
-        aiPredictedCost =
-          typeof predJson.data.predicted_cost === "number"
-            ? predJson.data.predicted_cost
-            : parseFloat(predJson.data.predicted_cost || "0");
-        aiPredictedKwh =
-          typeof predJson.data.predicted_kwh === "number"
-            ? predJson.data.predicted_kwh
-            : parseFloat(predJson.data.predicted_kwh || "0");
-
-        if (typeof predJson.data.rate_per_kwh === "number" && predJson.data.rate_per_kwh > 0) {
-          useSettingsStore.getState().setRatePerKwh(predJson.data.rate_per_kwh);
-        }
-      }
-    }
-  } catch (error) {
-    debugLog(
-      "getBillPrediction",
-      `⚠️ AI bill prediction fetch FAILED (non-critical)`,
-      error instanceof Error ? error.message : error,
-    );
-  }
-
-  // 3. Fetch tips history from /tips/{device_id}/history
+  // 2. Saving tips from /tips/{device_id}/history
   let savingTips: TipItem[] = [];
   try {
     const tipsEndpoint = `${API_URL}/tips/${deviceId}/history?limit=5`;
@@ -742,29 +576,19 @@ export async function getBillPrediction(): Promise<BillPrediction> {
       error instanceof Error ? error.message : error,
     );
   }
-
-  if (aiSummary) {
-    savingTips = [{ text: aiSummary, category: "energy saving" }, ...savingTips];
-  } else if (savingTips.length === 0) {
-    savingTips = [
-      {
-        text: "Optimize appliance usage during peak demand to lower monthly bills.",
-        category: "energy saving",
-      },
-    ];
-  }
+  // If no tips came from the server, leave the array empty.
+  // The UI has a proper empty state ("No Saving Tips Available") for this case.
 
   // Monthly budget is user-controlled on frontend (stored in MMKV)
   const clientBudget = useSettingsStore.getState().monthlyBudget;
   const budget = clientBudget > 0 ? clientBudget : 5000;
 
-  // Resolve values: prioritize deterministic MTD data
-  const predictedBill = mtdData ? mtdData.predicted_bill : aiPredictedCost;
-  const predictedUnits = mtdData ? mtdData.predicted_units : aiPredictedKwh;
-  const mtdBill = mtdData ? mtdData.mtd_bill : 0;
-  const monthUnits = mtdData ? mtdData.mtd_units : aiPredictedKwh;
-  const dailyAverage = mtdData ? mtdData.avg_daily_units : (predictedUnits / 30);
-  const daysRemaining = mtdData ? mtdData.remaining_days : (30 - new Date().getDate());
+  const predictedBill = mtdData?.predicted_bill ?? 0;
+  const predictedUnits = mtdData?.predicted_units ?? 0;
+  const mtdBill = mtdData?.mtd_bill ?? 0;
+  const monthUnits = mtdData?.mtd_units ?? 0;
+  const dailyAverage = mtdData?.avg_daily_units ?? 0;
+  const daysRemaining = mtdData?.remaining_days ?? 0;
 
   const result: BillPrediction = {
     monthUnits: parseFloat(monthUnits.toFixed(2)),
@@ -784,7 +608,10 @@ export async function getBillPrediction(): Promise<BillPrediction> {
     totalDays: mtdData?.total_days,
     billingPeriodStart: mtdData?.billing_period_start,
     billingPeriodEnd: mtdData?.billing_period_end,
-    remainingEstimatedBill: mtdData?.remaining_estimated_bill !== undefined ? parseFloat(mtdData.remaining_estimated_bill.toFixed(2)) : undefined,
+    remainingEstimatedBill:
+      mtdData?.remaining_estimated_bill !== undefined
+        ? parseFloat(mtdData.remaining_estimated_bill.toFixed(2))
+        : undefined,
     currencySymbol: mtdData?.currency_symbol || "Rs.",
     ratePerKwh: mtdData?.rate_per_kwh,
     tariffType: mtdData?.tariff_type,
@@ -795,37 +622,6 @@ export async function getBillPrediction(): Promise<BillPrediction> {
 
   debugLog("getBillPrediction", `✅ FINAL RESULT →`, result);
   return result;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Devices
-// ─────────────────────────────────────────────────────────────────────────────
-
-export async function getDevices(): Promise<DeviceUsage[]> {
-  const endpoint = `${API_URL}/devices`;
-  debugLog("getDevices", `Calling GET ${endpoint}`);
-
-  const response = await protectedFetch(endpoint, { method: "GET" });
-  const json = await response.json();
-
-  if (!response.ok) {
-    debugLog("getDevices", `❌ FAILED`, json);
-    throw new Error(json?.message ?? "Failed to get devices.");
-  }
-
-  debugLog(
-    "getDevices",
-    `✅ Received ${json.data?.length ?? 0} devices`,
-    json.data,
-  );
-
-  return json.data.map((device: any) => ({
-    id: device.id,
-    device: device.device_name,
-    power: 0,
-    icon: "devices", // Standard fallback icon
-    isOn: device.status === "active",
-  }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -890,7 +686,11 @@ export async function generateTips(): Promise<AiTip[]> {
   const endpoint = `${API_URL}/tips/${deviceId}/generate`;
   debugLog("generateTips", `Calling POST ${endpoint}`);
 
-  const response = await protectedFetch(endpoint, { method: "POST" });
+  const syncSecret = process.env.EXPO_PUBLIC_SYNC_SECRET;
+  const response = await protectedFetch(endpoint, {
+    method: "POST",
+    headers: syncSecret ? { "X-Sync-Secret": syncSecret } : undefined,
+  });
   const json = await response.json();
 
   if (!response.ok) {
@@ -923,11 +723,12 @@ export async function getSensorStatus(): Promise<SensorStatus> {
     throw new Error(json?.message ?? "Failed to get sensor status.");
   }
 
-  const { device, latest_reading } = json.data;
+  const { latest_reading } = json.data;
 
-  // Use the actual device status from the database instead of timestamp math
-  // This matches why the dashboard shows "Connected"
-  const isOnline = device?.status === "active";
+  // Connectivity is decided by the backend from the age of the latest reading
+  // (is_online / connection_status). device.status is only the record's
+  // active/inactive flag and does not reflect whether hardware is reporting.
+  const isOnline = resolveIsOnline(json.data);
   const status = isOnline ? "online" : "offline";
 
   debugLog(
@@ -939,11 +740,8 @@ export async function getSensorStatus(): Promise<SensorStatus> {
     acs712: status,
     zmpt: status,
     temp: status,
-    wifi: "strong",
     esp32: status === "online" ? "connected" : "disconnected",
-    lastUpdated: latest_reading?.recorded_at || new Date().toISOString(),
-    uptime: "Unknown",
-    ip: "Unknown",
+    lastUpdated: latest_reading?.recorded_at || "",
   };
 }
 
@@ -978,13 +776,6 @@ export function useGetBillPrediction() {
   return useQuery({
     queryKey: ["bill-prediction"],
     queryFn: getBillPrediction,
-  });
-}
-
-export function useGetDevices() {
-  return useQuery({
-    queryKey: ["devices"],
-    queryFn: getDevices,
   });
 }
 
@@ -1031,16 +822,20 @@ export function useGetMtdBilling(deviceId?: string) {
 
 import { database } from "@/lib/firebase";
 import { onValue, ref } from "firebase/database";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Hook that listens to Firebase Realtime Database for instant sensor updates.
- * This bypasses the API polling delay for a truly seamless experience.
+ * Includes watchdog timer & staleness detection: if the hardware stops sending
+ * packets for more than 6 seconds (or initial payload is old), isLive becomes false
+ * and data drops to null (standby) so the UI doesn't display frozen fake numbers.
  */
 export function useFirebaseLiveData(deviceId: string = "energy") {
   const [data, setData] = useState<LiveDataPoint | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLive, setIsLive] = useState(false);
   const [error, setError] = useState<Error | null>(null);
+  const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const sensorRef = ref(database, deviceId);
@@ -1049,21 +844,49 @@ export function useFirebaseLiveData(deviceId: string = "energy") {
       "🔥 useFirebaseLiveData",
       `Subscribing to Firebase path: "/${deviceId}"`,
     );
-    debugLog(
-      "🔥 useFirebaseLiveData",
-      `Database URL: ${database.app.options.databaseURL}`,
-    );
+
+    const resetWatchdog = () => {
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+      }
+      // If hardware stops transmitting for 6 seconds, mark offline / standby
+      watchdogTimerRef.current = setTimeout(() => {
+        debugLog("🔥 useFirebaseLiveData", "⏱️ Hardware watchdog timeout: no packets received -> hardware OFF");
+        setIsLive(false);
+      }, 6000);
+    };
 
     const unsubscribe = onValue(
       sensorRef,
       (snapshot) => {
         const val = snapshot.val();
         if (val) {
-          debugLog(
-            "🔥 useFirebaseLiveData",
-            `✅ Data received from Firebase →`,
-            val,
-          );
+          const now = Date.now();
+
+          // Check if payload contains an embedded timestamp to verify freshness
+          const rawTs = val.timestamp ?? val.last_updated ?? val.updated_at ?? val.time;
+          let isStale = false;
+
+          if (typeof rawTs === "number") {
+            const tsMs = rawTs < 1e11 ? rawTs * 1000 : rawTs;
+            if (now - tsMs > 10000) {
+              isStale = true;
+            }
+          } else if (typeof rawTs === "string" && !isNaN(Date.parse(rawTs))) {
+            if (now - Date.parse(rawTs) > 10000) {
+              isStale = true;
+            }
+          }
+
+          if (isStale) {
+            debugLog("🔥 useFirebaseLiveData", "⚠️ Stale snapshot detected (hardware is OFF)");
+            setIsLive(false);
+            setIsLoading(false);
+            return;
+          }
+
+          setIsLive(true);
+          resetWatchdog();
 
           const reading: LiveDataPoint = {
             time: formatTime(new Date()),
@@ -1073,45 +896,36 @@ export function useFirebaseLiveData(deviceId: string = "energy") {
             temperature: parseFloat(val.temp || val.temperature || "0"),
           };
 
-          debugLog(
-            "🔥 useFirebaseLiveData",
-            `✅ Parsed to LiveDataPoint →`,
-            reading,
-          );
-
           setData(reading);
           setIsLoading(false);
           setError(null);
         } else {
-          debugLog(
-            "🔥 useFirebaseLiveData",
-            `⚠️ snapshot.val() is NULL at path "/${deviceId}". Check Firebase console.`,
-          );
+          setIsLive(false);
           setIsLoading(false);
         }
       },
       (err) => {
-        debugLog("🔥 useFirebaseLiveData", `❌ Firebase listener ERROR`, {
-          code: (err as any)?.code,
-          message: err.message,
-        });
-        debugLog("🔥 useFirebaseLiveData", `❌ Possible causes:`);
-        debugLog(
-          "🔥 useFirebaseLiveData",
-          `   • Firebase rules deny read access`,
-        );
-        debugLog("🔥 useFirebaseLiveData", `   • Wrong databaseURL in config`);
-        debugLog("🔥 useFirebaseLiveData", `   • No internet connection`);
+        debugLog("🔥 useFirebaseLiveData", `❌ Firebase listener ERROR`, err);
         setError(err);
+        setIsLive(false);
         setIsLoading(false);
       },
     );
 
     return () => {
-      debugLog("🔥 useFirebaseLiveData", `Unsubscribing from "/${deviceId}"`);
+      if (watchdogTimerRef.current) {
+        clearTimeout(watchdogTimerRef.current);
+      }
       unsubscribe();
     };
   }, [deviceId]);
 
-  return { data, isLoading, isError: !!error, error };
+  return {
+    data: isLive ? data : null,
+    rawData: data,
+    isLive,
+    isLoading,
+    isError: !!error,
+    error,
+  };
 }

@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
+import { getDefaultDeviceId } from "@/api/energy.service";
 import protectedFetch from "@/api/ProtectedFetch";
 import { ENERGY } from "@/constants/energyConstants";
 import { API_URL } from "@/constants/variables";
@@ -7,9 +8,13 @@ import type { AlertItem } from "@/types/energy";
 
 export async function getAlerts(): Promise<AlertItem[]> {
   try {
-    const response = await protectedFetch(`${API_URL}/tips/all`, {
-      method: "GET",
-    });
+    // /tips/all only returns the single latest tip per device, so use the
+    // device history to get a real list of alerts.
+    const deviceId = await getDefaultDeviceId();
+    const response = await protectedFetch(
+      `${API_URL}/tips/${deviceId}/history?limit=20`,
+      { method: "GET" },
+    );
 
     if (response.ok) {
       const json = await response.json();

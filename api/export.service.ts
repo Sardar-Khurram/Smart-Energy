@@ -8,6 +8,37 @@ export type ExportType = "consumption" | "billing" | "alerts";
 export type ExportFormat = "csv" | "pdf";
 export type ExportAction = "share" | "save";
 
+async function assertValidReport(file: File, format: ExportFormat) {
+  if (format === "pdf") {
+    // "%PDF" in base64 is "JVBER"
+    const head = (await file.base64()).slice(0, 5);
+    if (head === "JVBER") return;
+  } else {
+    const text = await file.text();
+    if (!text.trimStart().startsWith("{")) return;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed?.status !== "error") return;
+    } catch {
+      return;
+    }
+  }
+
+  let message = "The server did not return a valid report.";
+  try {
+    const parsed = JSON.parse(await file.text());
+    if (parsed?.message) message = parsed.message;
+  } catch {
+    // binary/non-JSON body: keep the generic message
+  }
+  try {
+    await file.delete();
+  } catch {
+    // ignore cleanup failure
+  }
+  throw new Error(message);
+}
+
 export async function exportReport(
   deviceId: string,
   type: ExportType,
@@ -40,6 +71,10 @@ export async function exportReport(
 
     // Download the file using Expo FileSystem (SDK 55 API)
     const downloadedFile = await File.downloadFileAsync(url, tempFile);
+
+    // The backend answers 400/404 with a JSON error body (e.g. "No data found for
+    // this device or date range."). Make sure we did not just save that as a report.
+    await assertValidReport(downloadedFile, format);
 
     // If it was an Android direct save, move it to the selected directory
     if (isAndroidSave && userSelectedDirectoryUri) {
